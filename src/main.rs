@@ -21,7 +21,7 @@ use std::fs::File;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
-use std::str;
+use std::{fmt, str};
 
 #[derive(Clone, Copy, clap::Parser)]
 #[command(version)]
@@ -32,7 +32,7 @@ struct Options {
     #[clap(default_value_t = 8080, long, short)]
     port: u16,
 
-    #[clap(default_value = "syft-binary", long, short)]
+    #[clap(default_value_t = SpdxGenerator::SyftBinary, long, short)]
     spdx: SpdxGenerator,
 }
 
@@ -40,6 +40,17 @@ struct Options {
 enum SpdxGenerator {
     SyftBinary,
     SyftDockerContainer,
+}
+
+impl fmt::Display for SpdxGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use clap::ValueEnum;
+
+        self.to_possible_value()
+            .expect("no skipped variants")
+            .get_name()
+            .fmt(f)
+    }
 }
 
 #[tokio::main]
