@@ -23,6 +23,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::{fmt, str};
 
+pub struct SourceCode<'a> {
+    name: &'a str,
+    tarball: Bytes,
+}
+
 #[derive(Clone, Copy, clap::Parser)]
 #[command(version)]
 struct Options {
@@ -101,14 +106,16 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
 }
 
 fn handle_upload(upload: Bytes, generator: SpdxGenerator) -> Result<String> {
-    generate_spdx("", &SourceCode { tarball: upload }, generator)
+    generate_spdx(
+        &SourceCode {
+            name: "",
+            tarball: upload,
+        },
+        generator,
+    )
 }
 
-struct SourceCode {
-    tarball: Bytes,
-}
-
-fn generate_spdx(name: &str, source: &SourceCode, generator: SpdxGenerator) -> Result<String> {
+fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String> {
     use SpdxGenerator::*;
 
     let dir = tempfile::tempdir()?;
@@ -118,6 +125,7 @@ fn generate_spdx(name: &str, source: &SourceCode, generator: SpdxGenerator) -> R
     archive.sync_all()?;
 
     let dir_path_str = dir.path().to_string_lossy();
+    let name = source.name;
     let output = match generator {
         SyftBinary => Command::new("/syft")
             .arg("packages")
