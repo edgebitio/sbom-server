@@ -11,14 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use hyper::body::Bytes;
 use hyper::http::{Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use std::convert::Infallible;
-use std::fs::File;
-use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::{fmt, str};
@@ -118,11 +116,9 @@ fn handle_upload(upload: Bytes, generator: SpdxGenerator) -> Result<String> {
 fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String> {
     use SpdxGenerator::*;
 
-    let dir = tempfile::tempdir()?;
+    let dir = tempfile::tempdir().context("creating temporary directory")?;
     let archive_path = dir.path().join("archive.tar");
-    let mut archive = File::create(&archive_path)?;
-    archive.write_all(&source.tarball)?;
-    archive.sync_all()?;
+    std::fs::write(&archive_path, &source.tarball).context("writing source archive")?;
 
     let dir_path_str = dir.path().to_string_lossy();
     let name = source.name;
@@ -132,7 +128,8 @@ fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String
             .arg(format!("--source-name={name}"))
             .arg("--output=spdx-json")
             .arg(format!("docker-archive:{}", archive_path.to_string_lossy()))
-            .output(),
+            .output()
+            .context("running /syft"),
         SyftDockerContainer => Command::new("docker")
             .arg("run")
             .arg(format!("--volume={dir_path_str}:{dir_path_str}:ro",))
@@ -142,7 +139,8 @@ fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String
             .arg(format!("--source-name={name}"))
             .arg("--output=spdx-json")
             .arg("docker-archive:archive.tar")
-            .output(),
+            .output()
+            .context("running syft in container"),
     }?;
 
     if output.status.success() {
