@@ -1,5 +1,17 @@
 # SBOM Server #
 
+## Packaging ##
+
+From the root of the repository, run the following commands to create a
+container image which contains `syft` and `sbom-server`:
+
+```sh
+cargo build --release --target x86_64-unknown-linux-musl
+docker build --file dist/Dockerfile .
+```
+
+Consider using docker's `--tag` flag to easily reference the resultant image.
+
 ## Development ##
 
 This project makes use of git commit hooks. Configure git to use them by running
