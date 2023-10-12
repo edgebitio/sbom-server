@@ -1,0 +1,37 @@
+name: CI
+on: [ pull_request ]
+jobs:
+  hooks:
+    name: Git Hooks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Parse MSRV
+        run: sed -n 's/^rust-version = "\(.*\)"$/RUSTUP_TOOLCHAIN=\1/p' Cargo.toml >> $GITHUB_ENV
+      - name: Install Rust Toolchain
+        run: rustup toolchain install $RUSTUP_TOOLCHAIN
+      - name: Install Clippy and Rustfmt
+        run: rustup component add clippy rustfmt
+      - name: Run hooks
+        run: |
+          base=$(git rev-parse "origin/${{ github.base_ref }}")
+          head=$(git rev-parse "origin/${{ github.head_ref }}")
+          git rev-list --reverse $base..$head | while read commit
+          do
+            echo ::group::Checking $commit
+            git reset $commit --hard
+
+            echo ::group::Running pre-commit
+            .githooks/pre-commit
+            echo ::endgroup::
+
+            echo ::group::Running commit-msg
+            git log --format=format:%B -n1 > /tmp/commit_msg
+            .githooks/commit-msg /tmp/commit_msg
+            echo ::endgroup::
+
+            echo ::endgroup::
+          done
