@@ -36,5 +36,6 @@ num=0
 while read line
 do
     ((num++))
+    [[ "${line}" == \#* ]] && continue
     (( ${#line} <= LINE_LENGTH )) || die "line ${num} too long"
 done <<< "${commit_msg}"
