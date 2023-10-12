@@ -13,12 +13,11 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use ed25519_dalek::SigningKey;
 use hyper::body::Bytes;
 use hyper::http::{Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use nsm::Nsm;
-use ring::rand::SystemRandom;
-use ring::signature::Ed25519KeyPair;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
@@ -131,12 +130,7 @@ fn handle_upload(upload: Bytes, generator: SpdxGenerator, attest: Attestation) -
     match attest {
         Attestation::None => Ok(spdx),
         Attestation::InToto => {
-            let key = Ed25519KeyPair::from_pkcs8(
-                Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
-                    .map_err(|_| anyhow!("failed to generate key pair"))?
-                    .as_ref(),
-            )
-            .map_err(|_| anyhow!("failed to parse generated key pair"))?;
+            let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
 
             in_toto::bundle(&[
                 in_toto::spdx_envelope(&source, spdx, &key).context("creating SPDX envelope")?,
