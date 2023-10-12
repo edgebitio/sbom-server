@@ -16,10 +16,16 @@ use clap::Parser;
 use hyper::body::Bytes;
 use hyper::http::{Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
+use nsm::Nsm;
+use ring::rand::SystemRandom;
+use ring::signature::Ed25519KeyPair;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::{fmt, str};
+
+mod in_toto;
+mod nsm;
 
 pub struct SourceCode<'a> {
     name: &'a str,
@@ -91,26 +97,55 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
         Err(err) => return internal_server_error(err.to_string()),
     };
 
+    macro_rules! handle_post {
+        ($fn:expr) => {
+            match head.method {
+                Method::POST => match $fn {
+                    Ok(bundle) => Ok(Response::new(Body::from(bundle))),
+                    Err(err) => bad_request(format!("{err:#}\n")),
+                },
+                _ => method_not_allowed(""),
+            }
+        };
+    }
+
     match head.uri.path() {
-        "/spdx" => match head.method {
-            Method::POST => match handle_upload(body, config.spdx) {
-                Ok(bundle) => Ok(Response::new(Body::from(bundle))),
-                Err(err) => bad_request(err.to_string()),
-            },
-            _ => method_not_allowed(""),
-        },
+        "/spdx" => handle_post!(handle_upload(body, config.spdx, Attestation::None)),
+        "/in-toto/spdx" => handle_post!(handle_upload(body, config.spdx, Attestation::InToto)),
         _ => not_found(""),
     }
 }
 
-fn handle_upload(upload: Bytes, generator: SpdxGenerator) -> Result<String> {
-    generate_spdx(
-        &SourceCode {
-            name: "",
-            tarball: upload,
-        },
-        generator,
-    )
+enum Attestation {
+    None,
+    InToto,
+}
+
+fn handle_upload(upload: Bytes, generator: SpdxGenerator, attest: Attestation) -> Result<String> {
+    let source = SourceCode {
+        name: "",
+        tarball: upload,
+    };
+
+    let spdx = generate_spdx(&source, generator).context("generating SBOM")?;
+    match attest {
+        Attestation::None => Ok(spdx),
+        Attestation::InToto => {
+            let key = Ed25519KeyPair::from_pkcs8(
+                Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
+                    .map_err(|_| anyhow!("failed to generate key pair"))?
+                    .as_ref(),
+            )
+            .map_err(|_| anyhow!("failed to parse generated key pair"))?;
+
+            in_toto::bundle(&[
+                in_toto::spdx_envelope(&source, spdx, &key).context("creating SPDX envelope")?,
+                in_toto::scai_envelope(&source, Nsm::new()?.attest(&key).context("attesting key")?)
+                    .context("creating SCAI envelope")?,
+            ])
+            .context("creating in-toto bundle")
+        }
+    }
 }
 
 fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String> {
