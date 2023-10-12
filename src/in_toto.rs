@@ -15,7 +15,7 @@ use crate::SourceCode;
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
-use ring::signature::Ed25519KeyPair;
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::json;
 use serde_json::value::Value;
 
@@ -40,7 +40,7 @@ pub struct EnvelopeSignature {
 }
 
 impl Envelope {
-    fn new<P: serde::Serialize>(payload: P, key: Option<&Ed25519KeyPair>) -> Result<Self> {
+    fn new<P: serde::Serialize>(payload: P, key: Option<&SigningKey>) -> Result<Self> {
         let payload = serde_json::to_string(&payload).context("serializing payload")?;
         let mut env = Envelope {
             payload_type: MIME_IN_TOTO,
@@ -57,14 +57,14 @@ impl Envelope {
             );
             env.signatures.push(EnvelopeSignature {
                 keyid: None,
-                sig: base64(key.sign(pae.as_bytes())),
+                sig: base64(key.sign(pae.as_bytes()).to_bytes()),
             });
         }
         Ok(env)
     }
 }
 
-pub fn spdx_envelope(source: &SourceCode, spdx: String, key: &Ed25519KeyPair) -> Result<Envelope> {
+pub fn spdx_envelope(source: &SourceCode, spdx: String, key: &SigningKey) -> Result<Envelope> {
     Envelope::new(
         serde_json::json!({
             "_type": SCHEMA_STATEMENT,

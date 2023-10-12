@@ -16,7 +16,7 @@ use aws_nitro_enclaves_nsm_api::api::{Request, Response};
 use aws_nitro_enclaves_nsm_api::driver;
 use ed25519::pkcs8::EncodePublicKey;
 use ed25519::PublicKeyBytes;
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ed25519_dalek::SigningKey;
 use serde_bytes::ByteBuf;
 
 pub struct Nsm {
@@ -33,17 +33,12 @@ impl Nsm {
         Ok(Nsm { fd })
     }
 
-    pub fn attest(&self, key: &Ed25519KeyPair) -> Result<Vec<u8>> {
-        let pubkey = {
-            let mut pk = PublicKeyBytes([0; 32]);
-            pk.0.copy_from_slice(key.public_key().as_ref());
-            pk
-        };
+    pub fn attest(&self, key: &SigningKey) -> Result<Vec<u8>> {
         let req = Request::Attestation {
             nonce: None,
             user_data: None,
             public_key: Some(ByteBuf::from(
-                pubkey
+                PublicKeyBytes(key.verifying_key().to_bytes())
                     .to_public_key_der()
                     // TODO: once 8f37b603 makes its way into a release of
                     // ed25519, the error mapping can be removed.
