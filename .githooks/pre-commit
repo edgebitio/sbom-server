@@ -16,4 +16,4 @@
 set -e
 
 cargo fmt --check
-cargo clippy --no-deps -- --deny=warnings
+cargo clippy --quiet --no-deps -- --deny=warnings
