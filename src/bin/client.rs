@@ -35,14 +35,28 @@ struct Options {
 
 #[derive(clap::Subcommand)]
 enum Action {
+    /// Create an SBOM from the given artifact
+    ///
+    /// The artifact is referenced by <schema>:<name>, for example:
+    ///   docker:repo/image:tag
+    ///   podman:repo/image:tag
+    ///   registry:repo/image:tag
+    ///   docker-archive:path/to/image.tar
+    ///   oci-archive:path/to/image.tar
+    ///   oci-dir:path/to/image
+    ///   singularity:path/to/image.sif
+    ///   dir:path/to/project
+    ///   file:path/to/project/file
+    /// To read the artifact from stdin, use - as the name.
+    #[command(verbatim_doc_comment)]
     Sbom {
+        /// Artifact for which to generate the SBOM
+        #[arg(value_parser = RefSpec::parse)]
+        artifact: RefSpec,
+
         /// Wrap the SBOM in an in-toto attestation
         #[arg(long, short)]
         attest: bool,
-
-        /// Image for which to generate the SBOM
-        #[arg(value_parser = RefSpec::parse)]
-        image: RefSpec,
     },
 }
 
@@ -64,7 +78,7 @@ impl RefSpec {
         Ok(
             match s
                 .split_once(':')
-                .ok_or(anyhow!("malformed image refspec"))?
+                .ok_or(anyhow!("malformed artifact refspec"))?
             {
                 ("docker", pullspec) => Docker(pullspec.into()),
                 ("podman", pullspec) => Podman(pullspec.into()),
@@ -73,7 +87,7 @@ impl RefSpec {
                 ("oci-archive", path) => OciArchive(path.into()),
                 ("oci-dir", path) => OciDir(path.into()),
                 ("singularity", pullspec) => Singularity(pullspec.into()),
-                (schema, _) => anyhow::bail!("unrecognized image schema '{schema}'"),
+                (schema, _) => anyhow::bail!("unrecognized artifact schema '{schema}'"),
             },
         )
     }
@@ -88,10 +102,10 @@ fn main() -> Result<()> {
     let client = Client::new(&config).context("creating upload client")?;
     match config.action {
         Sbom {
+            artifact: DockerArchive(path),
             attest,
-            image: DockerArchive(path),
-        } => client.upload_archive(path, attest),
-        Sbom { .. } => Err(anyhow!("image schema is not yet implemented")),
+        } => client.upload_artifact(path, attest),
+        Sbom { .. } => Err(anyhow!("artifact schema is not yet implemented")),
     }
     .and_then(|sbom| Ok(println!("{sbom}")))
 }
@@ -112,7 +126,7 @@ impl Client {
         })
     }
 
-    fn upload_archive<P: AsRef<Path>>(&self, path: P, attest: bool) -> Result<String> {
+    fn upload_artifact<P: AsRef<Path>>(&self, path: P, attest: bool) -> Result<String> {
         let req = self.client.post(
             match attest {
                 true => self.endpoint.join("in-toto/spdx"),
@@ -130,10 +144,10 @@ impl Client {
                     .context("reading from stdin")?;
                 req.body(stdin)
             }
-            path => req.body(File::open(path).context("opening archive")?),
+            path => req.body(File::open(path).context("opening artifact")?),
         }
         .send()
-        .context("sending archive to server")?;
+        .context("sending artifact to server")?;
 
         let status = resp.status();
         let text = resp.text().context("decoding response")?;
