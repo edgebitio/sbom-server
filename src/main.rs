@@ -34,13 +34,13 @@ pub struct SourceCode<'a> {
 #[derive(Clone, Copy, clap::Parser)]
 #[command(version)]
 struct Options {
-    #[clap(default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST), long, short)]
+    #[arg(default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST), long, short)]
     address: IpAddr,
 
-    #[clap(default_value_t = 8080, long, short)]
+    #[arg(default_value_t = 8080, long, short)]
     port: u16,
 
-    #[clap(default_value_t = SpdxGenerator::SyftBinary, long, short)]
+    #[arg(default_value_t = SpdxGenerator::SyftBinary, long, short)]
     spdx: SpdxGenerator,
 }
 
