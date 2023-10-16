@@ -3,6 +3,11 @@ name = "sbom-server"
 version = "0.1.0-dev"
 edition = "2021"
 rust-version = "1.70.0"
+default-run = "sbom-server"
+
+[[bin]]
+name = "client"
+required-features = ["client"]
 
 [dependencies]
 anyhow = "1.0.75"
@@ -13,9 +18,14 @@ ed25519 = { version = "2.2.2", features = ["alloc", "pkcs8"] }
 ed25519-dalek = { version = "2.0.0", features = ["rand_core"] }
 hyper = { version = "0.14.27", features = ["http1", "server", "tcp"] }
 rand = "0.8.5"
+reqwest = { version = "0.11.22", default-features = false, features = ["blocking"], optional = true }
 serde = "1.0.188"
 serde_bytes = "0.11.12"
 serde_json = { version = "1.0.107", features = ["raw_value"] }
 sha256 = "1.4.0"
 tempfile = "3.8.0"
 tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread"] }
+url = { version = "2.4.1", optional = true }
+
+[features]
+client = ["dep:reqwest", "dep:url"]
