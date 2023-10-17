@@ -96,18 +96,13 @@ impl RefSpec {
 fn main() -> Result<()> {
     use clap::Parser;
     use Action::*;
-    use RefSpec::*;
 
     let config = Options::parse();
     let client = Client::new(&config).context("creating upload client")?;
     match config.action {
-        Sbom {
-            artifact: DockerArchive(path),
-            attest,
-        } => client.upload_artifact(path, attest),
-        Sbom { .. } => Err(anyhow!("artifact schema is not yet implemented")),
+        Sbom { artifact, attest } => client.upload_artifact(&artifact, attest),
     }
-    .and_then(|sbom| Ok(println!("{sbom}")))
+    .map(|sbom| println!("{sbom}"))
 }
 
 struct Client {
@@ -126,7 +121,14 @@ impl Client {
         })
     }
 
-    fn upload_artifact<P: AsRef<Path>>(&self, path: P, attest: bool) -> Result<String> {
+    fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<String> {
+        use RefSpec::*;
+
+        let (path, content_type) = match artifact {
+            DockerArchive(path) => (path, "application/x-tar; scheme=docker-archive"),
+            _ => anyhow::bail!("artifact schema is not yet implemented"),
+        };
+
         let req = self
             .client
             .post(
@@ -139,9 +141,10 @@ impl Client {
             .header(
                 header::USER_AGENT,
                 format!("sbom-server-client/{}", clap::crate_version!()),
-            );
+            )
+            .header(header::CONTENT_TYPE, content_type);
 
-        let resp = match path.as_ref() {
+        let resp = match path {
             path if path == Path::new("-") => {
                 let mut stdin = Vec::new();
                 std::io::stdin()
