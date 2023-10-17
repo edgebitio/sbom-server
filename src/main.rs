@@ -149,20 +149,21 @@ fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String
     let archive_path = dir.path().join("archive.tar");
     std::fs::write(&archive_path, &source.tarball).context("writing source archive")?;
 
-    let dir_path_str = dir.path().to_string_lossy();
+    let archive_path = archive_path.to_string_lossy();
+    let dir_path = dir.path().to_string_lossy();
     let name = source.name;
     let output = match generator {
         SyftBinary => Command::new("/syft")
             .arg("packages")
             .arg(format!("--source-name={name}"))
             .arg("--output=spdx-json")
-            .arg(format!("docker-archive:{}", archive_path.to_string_lossy()))
+            .arg(format!("docker-archive:{archive_path}"))
             .output()
             .context("running /syft"),
         SyftDockerContainer => Command::new("docker")
             .arg("run")
-            .arg(format!("--volume={dir_path_str}:{dir_path_str}:ro",))
-            .arg(format!("--workdir={dir_path_str}"))
+            .arg(format!("--volume={dir_path}:{dir_path}:ro",))
+            .arg(format!("--workdir={dir_path}"))
             .arg("anchore/syft")
             .arg("packages")
             .arg(format!("--source-name={name}"))
