@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::{blocking, StatusCode, Url};
+use reqwest::{blocking, header, StatusCode, Url};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -127,13 +127,19 @@ impl Client {
     }
 
     fn upload_artifact<P: AsRef<Path>>(&self, path: P, attest: bool) -> Result<String> {
-        let req = self.client.post(
-            match attest {
-                true => self.endpoint.join("in-toto/spdx"),
-                false => self.endpoint.join("spdx"),
-            }
-            .context("building endpoint URL")?,
-        );
+        let req = self
+            .client
+            .post(
+                match attest {
+                    true => self.endpoint.join("in-toto/spdx"),
+                    false => self.endpoint.join("spdx"),
+                }
+                .context("building endpoint URL")?,
+            )
+            .header(
+                header::USER_AGENT,
+                format!("sbom-server-client/{}", clap::crate_version!()),
+            );
 
         let resp = match path.as_ref() {
             path if path == Path::new("-") => {
