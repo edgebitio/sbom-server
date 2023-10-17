@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 
 use anyhow::{anyhow, Context, Result};
+use flate2::read::GzEncoder;
 use reqwest::{blocking, header, StatusCode, Url};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+const COMPRESSION: flate2::Compression = flate2::Compression::fast();
 
 #[derive(clap::Parser)]
 #[command(version)]
@@ -143,21 +146,22 @@ impl Client {
                 header::USER_AGENT,
                 format!("sbom-server-client/{}", clap::crate_version!()),
             )
-            .header(header::CONTENT_TYPE, content_type);
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CONTENT_ENCODING, "gzip");
 
-        let resp = match path {
-            path if path == Path::new("-") => {
-                let mut stdin = Vec::new();
-                std::io::stdin()
-                    .lock()
-                    .read_to_end(&mut stdin)
-                    .context("reading from stdin")?;
-                req.body(stdin)
-            }
-            path => req.body(File::open(path).context("opening artifact")?),
+        let mut body = Vec::new();
+        if path == Path::new("-") {
+            GzEncoder::new(std::io::stdin().lock(), COMPRESSION).read_to_end(&mut body)
+        } else {
+            let artifact = File::open(path).context("opening artifact")?;
+            GzEncoder::new(artifact, COMPRESSION).read_to_end(&mut body)
         }
-        .send()
-        .context("sending artifact to server")?;
+        .context("compressing artifact")?;
+
+        let resp = req
+            .body(body)
+            .send()
+            .context("sending artifact to server")?;
 
         let status = resp.status();
         let text = resp.text().context("decoding response")?;
