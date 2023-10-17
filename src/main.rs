@@ -116,6 +116,7 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
         .ok_or(bad_request("missing content type"))
         .and_then(|header| match header.as_bytes() {
             b"application/x-tar; scheme=docker-archive" => Ok(DockerArchive),
+            b"application/x-tar; scheme=oci-archive" => Ok(OciArchive),
             _ => Err(bad_request("unrecognized content type")),
         }) {
         Ok(format) => format,
@@ -165,6 +166,7 @@ fn handle_upload(
 
 enum ArtifactFormat {
     DockerArchive,
+    OciArchive,
 }
 
 impl ArtifactFormat {
@@ -173,6 +175,7 @@ impl ArtifactFormat {
 
         match self {
             DockerArchive => "docker-archive",
+            OciArchive => "oci-archive",
         }
     }
 }

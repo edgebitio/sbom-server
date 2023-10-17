@@ -126,6 +126,7 @@ impl Client {
 
         let (path, content_type) = match artifact {
             DockerArchive(path) => (path, "application/x-tar; scheme=docker-archive"),
+            OciArchive(path) => (path, "application/x-tar; scheme=oci-archive"),
             _ => anyhow::bail!("artifact schema is not yet implemented"),
         };
 
