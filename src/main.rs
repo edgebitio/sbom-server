@@ -15,7 +15,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use ed25519_dalek::SigningKey;
 use hyper::body::Bytes;
-use hyper::http::{Method, Request, Response};
+use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use nsm::Nsm;
 use std::convert::Infallible;
@@ -77,6 +77,8 @@ async fn main() -> Result<()> {
 }
 
 async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    use ArtifactFormat::*;
+
     macro_rules! response_handler {
         ($name:ident, $code:expr) => {
             fn $name<T: Into<Body>>(body: T) -> Result<Response<Body>, Infallible> {
@@ -91,10 +93,6 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
     response_handler!(internal_server_error, StatusCode::INTERNAL_SERVER_ERROR);
 
     let (head, body) = req.into_parts();
-    let body = match body::to_bytes(body).await {
-        Ok(body) => body,
-        Err(err) => return internal_server_error(err.to_string()),
-    };
 
     macro_rules! handle_post {
         ($fn:expr) => {
@@ -108,9 +106,27 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
         };
     }
 
+    let body = match body::to_bytes(body).await {
+        Ok(body) => body,
+        Err(err) => return internal_server_error(err.to_string()),
+    };
+    let format = match head
+        .headers
+        .get(header::CONTENT_TYPE)
+        .ok_or(bad_request("missing content type"))
+        .and_then(|header| match header.as_bytes() {
+            b"application/x-tar; scheme=docker-archive" => Ok(DockerArchive),
+            _ => Err(bad_request("unrecognized content type")),
+        }) {
+        Ok(format) => format,
+        Err(resp) => return resp,
+    };
+
+    let spdx = config.spdx;
+
     match head.uri.path() {
-        "/spdx" => handle_post!(handle_upload(body, config.spdx, Attestation::None)),
-        "/in-toto/spdx" => handle_post!(handle_upload(body, config.spdx, Attestation::InToto)),
+        "/spdx" => handle_post!(handle_upload(body, format, spdx, Attestation::None)),
+        "/in-toto/spdx" => handle_post!(handle_upload(body, format, spdx, Attestation::InToto)),
         _ => not_found(""),
     }
 }
@@ -120,13 +136,18 @@ enum Attestation {
     InToto,
 }
 
-fn handle_upload(upload: Bytes, generator: SpdxGenerator, attest: Attestation) -> Result<String> {
+fn handle_upload(
+    upload: Bytes,
+    format: ArtifactFormat,
+    generator: SpdxGenerator,
+    attest: Attestation,
+) -> Result<String> {
     let source = SourceCode {
         name: "",
         tarball: upload,
     };
 
-    let spdx = generate_spdx(&source, generator).context("generating SBOM")?;
+    let spdx = generate_spdx(&source, format, generator).context("generating SBOM")?;
     match attest {
         Attestation::None => Ok(spdx),
         Attestation::InToto => {
@@ -142,7 +163,25 @@ fn handle_upload(upload: Bytes, generator: SpdxGenerator, attest: Attestation) -
     }
 }
 
-fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String> {
+enum ArtifactFormat {
+    DockerArchive,
+}
+
+impl ArtifactFormat {
+    fn as_str(&self) -> &str {
+        use ArtifactFormat::*;
+
+        match self {
+            DockerArchive => "docker-archive",
+        }
+    }
+}
+
+fn generate_spdx(
+    source: &SourceCode,
+    format: ArtifactFormat,
+    generator: SpdxGenerator,
+) -> Result<String> {
     use SpdxGenerator::*;
 
     let dir = tempfile::tempdir().context("creating temporary directory")?;
@@ -151,13 +190,14 @@ fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String
 
     let archive_path = archive_path.to_string_lossy();
     let dir_path = dir.path().to_string_lossy();
+    let format = format.as_str();
     let name = source.name;
     let output = match generator {
         SyftBinary => Command::new("/syft")
             .arg("packages")
             .arg(format!("--source-name={name}"))
             .arg("--output=spdx-json")
-            .arg(format!("docker-archive:{archive_path}"))
+            .arg(format!("{format}:{archive_path}"))
             .output()
             .context("running /syft"),
         SyftDockerContainer => Command::new("docker")
@@ -168,7 +208,7 @@ fn generate_spdx(source: &SourceCode, generator: SpdxGenerator) -> Result<String
             .arg("packages")
             .arg(format!("--source-name={name}"))
             .arg("--output=spdx-json")
-            .arg("docker-archive:archive.tar")
+            .arg(format!("{format}:archive.tar"))
             .output()
             .context("running syft in container"),
     }?;
