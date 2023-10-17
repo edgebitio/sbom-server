@@ -14,11 +14,13 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use ed25519_dalek::SigningKey;
-use hyper::body::Bytes;
+use flate2::read::GzDecoder;
+use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use nsm::Nsm;
 use std::convert::Infallible;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::{fmt, str};
@@ -110,6 +112,21 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
         Ok(body) => body,
         Err(err) => return internal_server_error(err.to_string()),
     };
+    let tarball = match head
+        .headers
+        .get(header::CONTENT_ENCODING)
+        .map(AsRef::as_ref)
+    {
+        Some(b"gzip") => {
+            let mut tarball = Vec::new();
+            match GzDecoder::new(body.reader()).read_to_end(&mut tarball) {
+                Ok(_) => tarball.into(),
+                Err(err) => return internal_server_error(err.to_string()),
+            }
+        }
+        Some(_) => return bad_request("unrecognized content encoding"),
+        None => body,
+    };
     let format = match head
         .headers
         .get(header::CONTENT_TYPE)
@@ -126,8 +143,8 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
     let spdx = config.spdx;
 
     match head.uri.path() {
-        "/spdx" => handle_post!(handle_upload(body, format, spdx, Attestation::None)),
-        "/in-toto/spdx" => handle_post!(handle_upload(body, format, spdx, Attestation::InToto)),
+        "/spdx" => handle_post!(handle_upload(tarball, format, spdx, Attestation::None)),
+        "/in-toto/spdx" => handle_post!(handle_upload(tarball, format, spdx, Attestation::InToto)),
         _ => not_found(""),
     }
 }
