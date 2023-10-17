@@ -16,6 +16,7 @@ base64 = "0.21.4"
 clap = { version = "4.4.6", features = ["cargo", "derive"] }
 ed25519 = { version = "2.2.2", features = ["alloc", "pkcs8"] }
 ed25519-dalek = { version = "2.0.0", features = ["rand_core"] }
+flate2 = "1.0.28"
 hyper = { version = "0.14.27", features = ["http1", "server", "tcp"] }
 rand = "0.8.5"
 reqwest = { version = "0.11.22", default-features = false, features = ["blocking"], optional = true }
