@@ -18,12 +18,15 @@ use flate2::read::GzDecoder;
 use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
+use ignore_result::Ignore;
 use nsm::Nsm;
 use std::convert::Infallible;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::{fmt, str};
+use tokio::sync::oneshot;
 
 mod in_toto;
 mod nsm;
@@ -44,6 +47,9 @@ struct Options {
 
     #[arg(default_value_t = SpdxGenerator::SyftBinary, long, short)]
     spdx: SpdxGenerator,
+
+    #[arg(long, short)]
+    one_shot: bool,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -67,13 +73,29 @@ impl fmt::Display for SpdxGenerator {
 async fn main() -> Result<()> {
     let config = Options::parse();
 
-    let server = Server::bind(&SocketAddr::from((config.address, config.port))).serve(
-        service::make_service_fn(|_conn| async move {
-            Ok::<_, Infallible>(service::service_fn(move |req| async move {
-                handle_request(config, req).await
-            }))
-        }),
-    );
+    let (tx, rx) = oneshot::channel::<()>();
+    let tx = Arc::new(Mutex::new(match config.one_shot {
+        true => Some(tx),
+        false => None,
+    }));
+    let server = Server::bind(&SocketAddr::from((config.address, config.port)))
+        .serve(service::make_service_fn(move |_conn| {
+            let tx = tx.clone();
+            async move {
+                Ok::<_, Infallible>(service::service_fn(move |req| {
+                    let tx = tx.clone();
+                    async move {
+                        if let Ok(Some(tx)) = tx.lock().map(|mut tx| tx.take()) {
+                            tx.send(()).ignore();
+                        }
+                        handle_request(config, req).await
+                    }
+                }))
+            }
+        }))
+        .with_graceful_shutdown(async {
+            rx.await.ignore();
+        });
 
     Ok(server.await?)
 }
