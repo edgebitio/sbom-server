@@ -19,7 +19,7 @@ use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use ignore_result::Ignore;
-use nsm::Nsm;
+use sbom_server::{in_toto, nsm::Nsm, SourceCode};
 use std::convert::Infallible;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -27,14 +27,6 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::{fmt, str};
 use tokio::sync::oneshot;
-
-mod in_toto;
-mod nsm;
-
-pub struct SourceCode<'a> {
-    name: &'a str,
-    tarball: Bytes,
-}
 
 #[derive(Clone, Copy, clap::Parser)]
 #[command(version)]

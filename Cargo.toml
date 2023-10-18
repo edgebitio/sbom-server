@@ -3,11 +3,14 @@ name = "sbom-server"
 version = "0.1.0-dev"
 edition = "2021"
 rust-version = "1.70.0"
-default-run = "sbom-server"
+default-run = "server"
 
 [[bin]]
 name = "client"
 required-features = ["client"]
+
+[[bin]]
+name = "server"
 
 [dependencies]
 anyhow = "1.0.75"
