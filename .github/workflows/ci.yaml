@@ -17,8 +17,8 @@ jobs:
         run: rustup component add clippy rustfmt
       - name: Run hooks
         run: |
-          base=$(git rev-parse "origin/${{ github.base_ref }}")
-          head=$(git rev-parse "origin/${{ github.head_ref }}")
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
           git rev-list --reverse $base..$head | while read commit
           do
             echo ::group::Checking $commit
