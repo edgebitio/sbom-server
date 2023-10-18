@@ -594,6 +594,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ignore-result"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "665ff4dce8edd10d490641ccb78949832f1ddbff02c584fb1f85ab888fe0e50c"
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -899,6 +905,7 @@ dependencies = [
  "ed25519-dalek",
  "flate2",
  "hyper",
+ "ignore-result",
  "rand",
  "reqwest",
  "serde",
