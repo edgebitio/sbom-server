@@ -16,8 +16,9 @@
 SCOPE_PREFIX='^.+: '
 TITLE_LENGTH=50
 LINE_LENGTH=70
+BACKUP_PATH=.git/COMMIT_MSG.bak
 
-commit_msg=$(< $1)
+commit_msg_file=$1
 commit_title=""
 while read line
 do
@@ -26,14 +27,16 @@ do
         commit_title="${line}"
         break
     fi
-done <<< "${commit_msg}"
+done < $commit_msg_file
 
 die() {
     echo "Improperly formatted commit message (${1}). Please use the following form:"
     echo "    <scope>: <title>"
     echo
     echo "    <description>"
-    echo "See the README for more information."
+    echo "See the README for more information. Making a backup to ${BACKUP_PATH}."
+
+    cp $commit_msg_file $BACKUP_PATH
     exit 1
 }
 
@@ -46,4 +49,4 @@ do
     ((num++))
     [[ "${line}" == \#* ]] && continue
     (( ${#line} <= LINE_LENGTH )) || die "line ${num} too long"
-done <<< "${commit_msg}"
+done < $commit_msg_file
