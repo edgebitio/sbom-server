@@ -18,7 +18,15 @@ TITLE_LENGTH=50
 LINE_LENGTH=70
 
 commit_msg=$(< $1)
-commit_title=$(head -n1 <<< "${commit_msg}")
+commit_title=""
+while read line
+do
+    if [[ -n "${line}" && "${line}" != \#* ]]
+    then
+        commit_title="${line}"
+        break
+    fi
+done <<< "${commit_msg}"
 
 die() {
     echo "Improperly formatted commit message (${1}). Please use the following form:"
