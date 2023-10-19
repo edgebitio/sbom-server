@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 
+shopt -s extglob
+
 SCOPE_PREFIX='^.+: '
 TITLE_LENGTH=50
 LINE_LENGTH=70
@@ -24,7 +26,7 @@ while read line
 do
     if [[ -n "${line}" && "${line}" != \#* ]]
     then
-        commit_title="${line}"
+        commit_title="${line##@(fixup! |amend! )}"
         break
     fi
 done < $commit_msg_file
