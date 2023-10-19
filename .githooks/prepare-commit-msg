@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# Copyright 2023 EdgeBit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+
+shopt -s extglob
+
+BACKUP_PATH=.git/COMMIT_MSG.bak
+LF=$'\n'
+
+[[ -f $BACKUP_PATH ]] || exit 0
+
+commit_msg_file=$1
+previous_msg=""
+while read line
+do
+    if [[ "${line}" != \#* ]]
+    then
+        previous_msg="${previous_msg}${LF}${line}"
+    fi
+done < $BACKUP_PATH
+previous_msg="${previous_msg##*(${LF})}"
+previous_msg="${previous_msg%%*(${LF})}"
+
+proposed=$(< $commit_msg_file)
+cat > $commit_msg_file <<-EOF
+	# Here is the previously proposed commit message:
+
+	$previous_msg
+
+	$proposed
+	EOF
+
+rm $BACKUP_PATH
