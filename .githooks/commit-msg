@@ -31,13 +31,18 @@ do
     fi
 done < $commit_msg_file
 
-die() {
+warn() {
     echo "Improperly formatted commit message (${1}). Please use the following form:"
     echo "    <scope>: <title>"
     echo
     echo "    <description>"
-    echo "See the README for more information. Making a backup to ${BACKUP_PATH}."
+    echo "See the README for more information."
+}
 
+die() {
+    warn $1
+
+    echo "Making a backup to ${BACKUP_PATH}."
     cp $commit_msg_file $BACKUP_PATH
     exit 1
 }
@@ -50,5 +55,5 @@ while read line
 do
     ((num++))
     [[ "${line}" == \#* ]] && continue
-    (( ${#line} <= LINE_LENGTH )) || die "line ${num} too long"
+    (( ${#line} <= LINE_LENGTH )) || warn "line ${num} too long"
 done < $commit_msg_file
