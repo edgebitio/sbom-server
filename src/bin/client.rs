@@ -12,14 +12,9 @@
 // See the License for the specific language governing permissions and
 
 use anyhow::{anyhow, Context, Result};
-use flate2::read::GzEncoder;
-use reqwest::{blocking, header, StatusCode, Url};
-use std::fs::File;
-use std::io::Read;
+use reqwest::{header, StatusCode, Url};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-const COMPRESSION: flate2::Compression = flate2::Compression::fast();
 
 #[derive(clap::Parser)]
 #[command(version)]
@@ -96,27 +91,28 @@ impl RefSpec {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     use clap::Parser;
     use Action::*;
 
     let config = Options::parse();
     let client = Client::new(&config).context("creating upload client")?;
     match config.action {
-        Sbom { artifact, attest } => client.upload_artifact(&artifact, attest),
+        Sbom { artifact, attest } => client.upload_artifact(&artifact, attest).await,
     }
     .map(|sbom| println!("{sbom}"))
 }
 
 struct Client {
-    client: blocking::Client,
+    client: reqwest::Client,
     endpoint: Url,
 }
 
 impl Client {
     fn new(config: &Options) -> Result<Self> {
         Ok(Client {
-            client: blocking::Client::builder()
+            client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .build()?,
             endpoint: Url::parse(&format!("http://{}:{}", config.host, config.port))
@@ -124,7 +120,12 @@ impl Client {
         })
     }
 
-    fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<String> {
+    async fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<String> {
+        use async_compression::tokio::bufread::GzipEncoder;
+        use reqwest::Body;
+        use tokio::fs::File;
+        use tokio::io::BufReader;
+        use tokio_util::io::ReaderStream;
         use RefSpec::*;
 
         let (path, content_type) = match artifact {
@@ -133,7 +134,16 @@ impl Client {
             _ => anyhow::bail!("artifact schema is not yet implemented"),
         };
 
-        let req = self
+        let body = if path == Path::new("-") {
+            Body::wrap_stream(ReaderStream::new(GzipEncoder::new(BufReader::new(
+                tokio::io::stdin(),
+            ))))
+        } else {
+            Body::wrap_stream(ReaderStream::new(GzipEncoder::new(BufReader::new(
+                File::open(path).await.context("opening artifact")?,
+            ))))
+        };
+        let resp = self
             .client
             .post(
                 match attest {
@@ -147,24 +157,14 @@ impl Client {
                 format!("sbom-server-client/{}", clap::crate_version!()),
             )
             .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_ENCODING, "gzip");
-
-        let mut body = Vec::new();
-        if path == Path::new("-") {
-            GzEncoder::new(std::io::stdin().lock(), COMPRESSION).read_to_end(&mut body)
-        } else {
-            let artifact = File::open(path).context("opening artifact")?;
-            GzEncoder::new(artifact, COMPRESSION).read_to_end(&mut body)
-        }
-        .context("compressing artifact")?;
-
-        let resp = req
+            .header(header::CONTENT_ENCODING, "gzip")
             .body(body)
             .send()
+            .await
             .context("sending artifact to server")?;
 
         let status = resp.status();
-        let text = resp.text().context("decoding response")?;
+        let text = resp.text().await.context("decoding response")?;
         match status {
             StatusCode::OK => Ok(text),
             status => Err(anyhow!(

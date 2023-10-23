@@ -14,6 +14,7 @@ name = "server"
 
 [dependencies]
 anyhow = "1.0.75"
+async-compression = { version = "0.4.4", features = ["gzip", "tokio"] }
 aws-nitro-enclaves-nsm-api = "0.4.0"
 base64 = "0.21.4"
 clap = { version = "4.4.6", features = ["cargo", "derive"] }
@@ -23,13 +24,14 @@ flate2 = "1.0.28"
 hyper = { version = "0.14.27", features = ["http1", "server", "tcp"] }
 ignore-result = "0.2.0"
 rand = "0.8.5"
-reqwest = { version = "0.11.22", default-features = false, features = ["blocking"], optional = true }
+reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "stream"], optional = true }
 serde = "1.0.188"
 serde_bytes = "0.11.12"
 serde_json = { version = "1.0.107", features = ["raw_value"] }
 sha256 = "1.4.0"
 tempfile = "3.8.0"
-tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.33.0", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
+tokio-util = { version = "0.7.9", features = ["io"] }
 url = { version = "2.4.1", optional = true }
 
 [features]
