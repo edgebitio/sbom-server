@@ -64,39 +64,6 @@ impl Envelope {
     }
 }
 
-pub fn spdx_envelope(source: &SourceCode, spdx: String, key: &SigningKey) -> Result<Envelope> {
-    Envelope::new(
-        serde_json::json!({
-            "_type": SCHEMA_STATEMENT,
-            "subject": statement_subject(&source.name, &spdx),
-            "predicateType": PREDICATE_SPDX,
-            "predicate": spdx,
-        }),
-        Some(key),
-    )
-}
-
-pub fn scai_envelope<T: AsRef<[u8]>>(source: &SourceCode, attestation: T) -> Result<Envelope> {
-    Envelope::new(
-        serde_json::json!({
-            "_type": SCHEMA_STATEMENT,
-            "subject": statement_subject(&source.name, &source.tarball),
-            "predicateType": PREDICATE_SCAI,
-            "predicate": {
-                "attributes": [{
-                    "attribute": "VALID_ENCLAVE",
-                    "evidence": {
-                        "name": "aws-enclave-attestation",
-                        "content": base64(attestation),
-                        "mediaType": MIME_COSE_SIGN1,
-                    }
-                }]
-            }
-        }),
-        None,
-    )
-}
-
 pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
     Ok(envelopes
         .iter()
@@ -105,13 +72,62 @@ pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
         .join("\n"))
 }
 
-fn statement_subject<C: AsRef<[u8]>>(name: &str, contents: C) -> Value {
-    json!([{
-        "name": name,
-        "digest": {
-            "sha256": sha256::digest(contents.as_ref()),
-        }
-    }])
+pub mod envelope {
+    use super::*;
+
+    pub fn spdx<S>(source: &SourceCode, spdx: S, key: &SigningKey) -> Result<Envelope>
+    where
+        S: AsRef<str>,
+    {
+        Envelope::new(
+            serde_json::json!({
+                "_type": SCHEMA_STATEMENT,
+                "subject": [ resource_descriptor(&source.name, spdx.as_ref()) ],
+                "predicateType": PREDICATE_SPDX,
+                "predicate": spdx.as_ref(),
+            }),
+            Some(key),
+        )
+        .context("creating SPDX envelope")
+    }
+
+    pub fn scai<A>(source: &SourceCode, attestation: A) -> Result<Envelope>
+    where
+        A: AsRef<[u8]>,
+    {
+        Envelope::new(
+            serde_json::json!({
+                "_type": SCHEMA_STATEMENT,
+                "subject": [ resource_descriptor(&source.name, &source.tarball) ],
+                "predicateType": PREDICATE_SCAI,
+                "predicate": {
+                    "attributes": [{
+                        "attribute": "VALID_ENCLAVE",
+                        "evidence": {
+                            "name": "aws-enclave-attestation",
+                            "content": base64(attestation),
+                            "mediaType": MIME_COSE_SIGN1,
+                        }
+                    }]
+                }
+            }),
+            None,
+        )
+        .context("creating SCAI envelope")
+    }
+
+    fn resource_descriptor<N, C>(name: N, contents: C) -> Value
+    where
+        N: AsRef<str>,
+        C: AsRef<[u8]>,
+    {
+        json!({
+            "name": name.as_ref(),
+            "digest": {
+                "sha256": sha256::digest(contents.as_ref()),
+            }
+        })
+    }
 }
 
 fn base64<T: AsRef<[u8]>>(input: T) -> String {
