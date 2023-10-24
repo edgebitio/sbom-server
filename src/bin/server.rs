@@ -192,8 +192,8 @@ fn handle_upload(
             let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
 
             in_toto::bundle(&[
-                envelope::spdx(&source, spdx, &key)?,
-                envelope::scai(&source, attestation)?,
+                envelope::spdx(&source, &spdx, &key)?,
+                envelope::scai(&source, &spdx, attestation)?,
             ])
             .context("creating in-toto bundle")
         }
@@ -262,6 +262,7 @@ fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
                 .and_then(|mut ms| ms.pop_front())
                 .and_then(|mut m| m.repo_tags.pop_front())
                 .unwrap_or("untagged".into())
+                + ".tar"
         }
         OciArchive => {
             let mut archive = tar::Archive::new(artifact.as_ref());
@@ -270,6 +271,7 @@ fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
                 .and_then(|mut i| i.manifests.pop_front())
                 .and_then(|mut m| m.annotations.remove("org.opencontainers.image.ref.name"))
                 .unwrap_or("untagged".into())
+                + ".tar"
         }
     })
 }
