@@ -186,12 +186,14 @@ fn handle_upload(
     match attest {
         Attestation::None => Ok(spdx),
         Attestation::InToto => {
+            use in_toto::envelope;
+
             let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
+            let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
 
             in_toto::bundle(&[
-                in_toto::spdx_envelope(&source, spdx, &key).context("creating SPDX envelope")?,
-                in_toto::scai_envelope(&source, Nsm::new()?.attest(&key).context("attesting key")?)
-                    .context("creating SCAI envelope")?,
+                envelope::spdx(&source, spdx, &key)?,
+                envelope::scai(&source, attestation)?,
             ])
             .context("creating in-toto bundle")
         }
