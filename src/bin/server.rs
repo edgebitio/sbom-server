@@ -19,7 +19,7 @@ use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use ignore_result::Ignore;
-use sbom_server::{in_toto, nsm::Nsm, SourceCode};
+use sbom_server::{in_toto, nsm::Nsm, Artifact, ArtifactFormat};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -129,15 +129,15 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
         Ok(body) => body,
         Err(err) => return internal_server_error(err.to_string()),
     };
-    let tarball = match head
+    let upload = match head
         .headers
         .get(header::CONTENT_ENCODING)
         .map(AsRef::as_ref)
     {
         Some(b"gzip") => {
-            let mut tarball = Vec::new();
-            match GzDecoder::new(body.reader()).read_to_end(&mut tarball) {
-                Ok(_) => tarball.into(),
+            let mut upload = Vec::new();
+            match GzDecoder::new(body.reader()).read_to_end(&mut upload) {
+                Ok(_) => upload.into(),
                 Err(err) => return internal_server_error(err.to_string()),
             }
         }
@@ -160,8 +160,8 @@ async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<
     let spdx = config.spdx;
 
     match head.uri.path() {
-        "/spdx" => handle_post!(handle_upload(tarball, format, spdx, Attestation::None)),
-        "/in-toto/spdx" => handle_post!(handle_upload(tarball, format, spdx, Attestation::InToto)),
+        "/spdx" => handle_post!(handle_upload(upload, format, spdx, Attestation::None)),
+        "/in-toto/spdx" => handle_post!(handle_upload(upload, format, spdx, Attestation::InToto)),
         _ => not_found(""),
     }
 }
@@ -177,12 +177,13 @@ fn handle_upload(
     generator: SpdxGenerator,
     attest: Attestation,
 ) -> Result<String> {
-    let source = SourceCode {
+    let artifact = Artifact {
         name: artifact_name(&upload, format).context("determining name of artifact")?,
-        tarball: upload,
+        contents: upload,
+        format,
     };
 
-    let spdx = generate_spdx(&source, format, generator).context("generating SBOM")?;
+    let spdx = generate_spdx(&artifact, generator).context("generating SBOM")?;
     match attest {
         Attestation::None => Ok(spdx),
         Attestation::InToto => {
@@ -192,27 +193,10 @@ fn handle_upload(
             let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
 
             in_toto::bundle(&[
-                envelope::spdx(&source, &spdx, &key)?,
-                envelope::scai(&source, &spdx, attestation)?,
+                envelope::spdx(&artifact, &spdx, &key)?,
+                envelope::scai(&artifact, &spdx, attestation)?,
             ])
             .context("creating in-toto bundle")
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ArtifactFormat {
-    DockerArchive,
-    OciArchive,
-}
-
-impl ArtifactFormat {
-    fn as_str(&self) -> &str {
-        use ArtifactFormat::*;
-
-        match self {
-            DockerArchive => "docker-archive",
-            OciArchive => "oci-archive",
         }
     }
 }
@@ -276,21 +260,17 @@ fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
     })
 }
 
-fn generate_spdx(
-    source: &SourceCode,
-    format: ArtifactFormat,
-    generator: SpdxGenerator,
-) -> Result<String> {
+fn generate_spdx(artifact: &Artifact, generator: SpdxGenerator) -> Result<String> {
     use SpdxGenerator::*;
 
     let dir = tempfile::tempdir().context("creating temporary directory")?;
     let archive_path = dir.path().join("archive.tar");
-    std::fs::write(&archive_path, &source.tarball).context("writing source archive")?;
+    std::fs::write(&archive_path, &artifact.contents).context("writing artifact")?;
 
     let archive_path = archive_path.to_string_lossy();
     let dir_path = dir.path().to_string_lossy();
-    let format = format.as_str();
-    let name = &source.name;
+    let format = artifact.format.as_str();
+    let name = &artifact.name;
     let output = match generator {
         SyftBinary => Command::new("/syft")
             .arg("packages")
