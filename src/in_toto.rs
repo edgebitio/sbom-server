@@ -68,7 +68,7 @@ pub fn spdx_envelope(source: &SourceCode, spdx: String, key: &SigningKey) -> Res
     Envelope::new(
         serde_json::json!({
             "_type": SCHEMA_STATEMENT,
-            "subject": statement_subject(source.name, &spdx),
+            "subject": statement_subject(&source.name, &spdx),
             "predicateType": PREDICATE_SPDX,
             "predicate": spdx,
         }),
@@ -80,7 +80,7 @@ pub fn scai_envelope<T: AsRef<[u8]>>(source: &SourceCode, attestation: T) -> Res
     Envelope::new(
         serde_json::json!({
             "_type": SCHEMA_STATEMENT,
-            "subject": statement_subject(source.name, &source.tarball),
+            "subject": statement_subject(&source.name, &source.tarball),
             "predicateType": PREDICATE_SCAI,
             "predicate": {
                 "attributes": [{

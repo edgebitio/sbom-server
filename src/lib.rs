@@ -16,7 +16,7 @@ pub mod nsm;
 
 use hyper::body::Bytes;
 
-pub struct SourceCode<'a> {
-    pub name: &'a str,
+pub struct SourceCode {
+    pub name: String,
     pub tarball: Bytes,
 }

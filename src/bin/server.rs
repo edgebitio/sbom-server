@@ -20,9 +20,12 @@ use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use ignore_result::Ignore;
 use sbom_server::{in_toto, nsm::Nsm, SourceCode};
+use std::borrow::Cow;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::{fmt, str};
@@ -175,7 +178,7 @@ fn handle_upload(
     attest: Attestation,
 ) -> Result<String> {
     let source = SourceCode {
-        name: "",
+        name: artifact_name(&upload, format).context("determining name of artifact")?,
         tarball: upload,
     };
 
@@ -195,6 +198,7 @@ fn handle_upload(
     }
 }
 
+#[derive(Clone, Copy)]
 enum ArtifactFormat {
     DockerArchive,
     OciArchive,
@@ -211,6 +215,63 @@ impl ArtifactFormat {
     }
 }
 
+fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
+    use ArtifactFormat::*;
+
+    #[derive(serde::Deserialize)]
+    struct DockerImageManifest {
+        #[serde(rename = "RepoTags")]
+        repo_tags: VecDeque<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct OciImageIndex {
+        manifests: VecDeque<OciImageManifest>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct OciImageManifest {
+        annotations: HashMap<String, String>,
+    }
+
+    macro_rules! find_object {
+        ($path:literal, $archive:expr) => {{
+            let mut entries = $archive.entries().context("reading entries from archive")?;
+            loop {
+                let file = match entries.next() {
+                    Some(entry) => entry.context("reading entry from archive")?,
+                    None => break None,
+                };
+
+                if matches!(file.path(), Ok(Cow::Borrowed(path)) if path == Path::new($path))
+                {
+                    break serde_json::from_reader(file).context("deserializing object")?
+                }
+            }
+        }}
+    }
+
+    Ok(match format {
+        DockerArchive => {
+            let mut archive = tar::Archive::new(artifact.as_ref());
+            let manifests: Option<VecDeque<DockerImageManifest>> =
+                find_object!("manifest.json", archive);
+            manifests
+                .and_then(|mut ms| ms.pop_front())
+                .and_then(|mut m| m.repo_tags.pop_front())
+                .unwrap_or("untagged".into())
+        }
+        OciArchive => {
+            let mut archive = tar::Archive::new(artifact.as_ref());
+            let index: Option<OciImageIndex> = find_object!("index.json", archive);
+            index
+                .and_then(|mut i| i.manifests.pop_front())
+                .and_then(|mut m| m.annotations.remove("org.opencontainers.image.ref.name"))
+                .unwrap_or("untagged".into())
+        }
+    })
+}
+
 fn generate_spdx(
     source: &SourceCode,
     format: ArtifactFormat,
@@ -225,7 +286,7 @@ fn generate_spdx(
     let archive_path = archive_path.to_string_lossy();
     let dir_path = dir.path().to_string_lossy();
     let format = format.as_str();
-    let name = source.name;
+    let name = &source.name;
     let output = match generator {
         SyftBinary => Command::new("/syft")
             .arg("packages")
