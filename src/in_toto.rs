@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-use crate::SourceCode;
+use crate::Artifact;
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
@@ -75,14 +75,14 @@ pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
 pub mod envelope {
     use super::*;
 
-    pub fn spdx<S>(source: &SourceCode, spdx: S, key: &SigningKey) -> Result<Envelope>
+    pub fn spdx<S>(artifact: &Artifact, spdx: S, key: &SigningKey) -> Result<Envelope>
     where
         S: AsRef<str>,
     {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(&source.name, &source.tarball) ],
+                "subject": [ resource_descriptor(&artifact.name, &artifact.contents) ],
                 "predicateType": PREDICATE_SPDX,
                 "predicate": spdx.as_ref(),
             }),
@@ -91,7 +91,7 @@ pub mod envelope {
         .context("creating SPDX envelope")
     }
 
-    pub fn scai<A, S>(source: &SourceCode, spdx: S, attestation: A) -> Result<Envelope>
+    pub fn scai<A, S>(artifact: &Artifact, spdx: S, attestation: A) -> Result<Envelope>
     where
         A: AsRef<[u8]>,
         S: AsRef<str>,
@@ -99,7 +99,7 @@ pub mod envelope {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", source.name), spdx.as_ref()) ],
+                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), spdx.as_ref()) ],
                 "predicateType": PREDICATE_SCAI,
                 "predicate": {
                     "attributes": [{

@@ -16,7 +16,24 @@ pub mod nsm;
 
 use hyper::body::Bytes;
 
-pub struct SourceCode {
+pub struct Artifact {
     pub name: String,
-    pub tarball: Bytes,
+    pub contents: Bytes,
+    pub format: ArtifactFormat,
+}
+#[derive(Clone, Copy)]
+pub enum ArtifactFormat {
+    DockerArchive,
+    OciArchive,
+}
+
+impl ArtifactFormat {
+    pub fn as_str(&self) -> &str {
+        use ArtifactFormat::*;
+
+        match self {
+            DockerArchive => "docker-archive",
+            OciArchive => "oci-archive",
+        }
+    }
 }
