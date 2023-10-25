@@ -64,15 +64,26 @@ impl fmt::Display for SpdxGenerator {
     }
 }
 
+macro_rules! response_handler {
+    ($name:ident, $code:expr) => {
+        fn $name<T: Into<Body>>(body: T) -> Result<Response<Body>, Infallible> {
+            Ok(Response::builder().status($code).body(body.into()).unwrap())
+        }
+    };
+}
+
+response_handler!(not_found, StatusCode::NOT_FOUND);
+response_handler!(method_not_allowed, StatusCode::METHOD_NOT_ALLOWED);
+response_handler!(bad_request, StatusCode::BAD_REQUEST);
+response_handler!(internal_server_error, StatusCode::INTERNAL_SERVER_ERROR);
+response_handler!(service_unavailable, StatusCode::SERVICE_UNAVAILABLE);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Options::parse();
 
     let (tx, rx) = oneshot::channel::<()>();
-    let tx = Arc::new(Mutex::new(match config.one_shot {
-        true => Some(tx),
-        false => None,
-    }));
+    let tx = Arc::new(Mutex::new(Some(tx)));
     let server = Server::bind(&SocketAddr::from((config.address, config.port)))
         .serve(service::make_service_fn(move |_conn| {
             let tx = tx.clone();
@@ -80,36 +91,25 @@ async fn main() -> Result<()> {
                 Ok::<_, Infallible>(service::service_fn(move |req| {
                     let tx = tx.clone();
                     async move {
-                        if let Ok(Some(tx)) = tx.lock().map(|mut tx| tx.take()) {
-                            tx.send(()).ignore();
+                        if config.one_shot {
+                            if let Ok(Some(tx)) = tx.lock().map(|mut tx| tx.take()) {
+                                tx.send(()).ignore()
+                            } else {
+                                return service_unavailable("server is shutting down");
+                            }
                         }
                         handle_request(config, req).await
                     }
                 }))
             }
         }))
-        .with_graceful_shutdown(async {
-            rx.await.ignore();
-        });
+        .with_graceful_shutdown(async { rx.await.ignore() });
 
     Ok(server.await?)
 }
 
 async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<Body>, Infallible> {
     use ArtifactFormat::*;
-
-    macro_rules! response_handler {
-        ($name:ident, $code:expr) => {
-            fn $name<T: Into<Body>>(body: T) -> Result<Response<Body>, Infallible> {
-                Ok(Response::builder().status($code).body(body.into()).unwrap())
-            }
-        };
-    }
-
-    response_handler!(not_found, StatusCode::NOT_FOUND);
-    response_handler!(method_not_allowed, StatusCode::METHOD_NOT_ALLOWED);
-    response_handler!(bad_request, StatusCode::BAD_REQUEST);
-    response_handler!(internal_server_error, StatusCode::INTERNAL_SERVER_ERROR);
 
     let (head, body) = req.into_parts();
 
