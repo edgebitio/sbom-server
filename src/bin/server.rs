@@ -19,50 +19,17 @@ use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use ignore_result::Ignore;
-use sbom_server::{in_toto, nsm::Nsm, Artifact, ArtifactFormat};
+use sbom_server::{in_toto, nsm::Nsm, Artifact, ArtifactFormat, Config, SpdxGenerator};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::Command;
+use std::str;
 use std::sync::{Arc, Mutex};
-use std::{fmt, str};
 use tokio::sync::oneshot;
-
-#[derive(Clone, Copy, clap::Parser)]
-#[command(version)]
-struct Options {
-    #[arg(default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST), long, short)]
-    address: IpAddr,
-
-    #[arg(default_value_t = 8080, long, short)]
-    port: u16,
-
-    #[arg(default_value_t = SpdxGenerator::SyftBinary, long, short)]
-    spdx: SpdxGenerator,
-
-    #[arg(long, short)]
-    one_shot: bool,
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum SpdxGenerator {
-    SyftBinary,
-    SyftDockerContainer,
-}
-
-impl fmt::Display for SpdxGenerator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use clap::ValueEnum;
-
-        self.to_possible_value()
-            .expect("no skipped variants")
-            .get_name()
-            .fmt(f)
-    }
-}
 
 macro_rules! response_handler {
     ($name:ident, $code:expr) => {
@@ -80,7 +47,7 @@ response_handler!(service_unavailable, StatusCode::SERVICE_UNAVAILABLE);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = Options::parse();
+    let config = Config::parse();
 
     let (tx, rx) = oneshot::channel::<()>();
     let tx = Arc::new(Mutex::new(Some(tx)));
@@ -108,7 +75,7 @@ async fn main() -> Result<()> {
     Ok(server.await?)
 }
 
-async fn handle_request(config: Options, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+async fn handle_request(config: Config, req: Request<Body>) -> Result<Response<Body>, Infallible> {
     use ArtifactFormat::*;
 
     let (head, body) = req.into_parts();
