@@ -11,19 +11,36 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-use crate::Artifact;
-use anyhow::Context;
-use anyhow::Result;
+use crate::{Artifact, Config, SpdxGeneration};
+use anyhow::{Context, Result};
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use serde_json::json;
-use serde_json::value::Value;
+use serde_json::{json, value::Value};
+use time::format_description::well_known::Rfc3339;
+use uuid::Uuid;
+
+macro_rules! provenance_base {
+    () => {
+        concat!(
+            "https://github.com/edgebitio/sbom-server/blob/",
+            clap::crate_version!(),
+            "/docs/spec/"
+        )
+    };
+}
 
 const MIME_IN_TOTO: &str = "application/vnd.in-toto+json";
 const MIME_COSE_SIGN1: &str = "application/cose; cose-type=\"cose-sign1\"";
+
 const SCHEMA_STATEMENT: &str = "https://in-toto.io/Statement/v1";
-const PREDICATE_SPDX: &str = "https://spdx.dev/Document/v2.3";
+
+const PREDICATE_PROVENANCE: &str = "https://slsa.dev/provenance/v1";
 const PREDICATE_SCAI: &str = "https://in-toto.io/attestation/scai/attribute-report/v0.2";
+const PREDICATE_SPDX: &str = "https://spdx.dev/Document/v2.3";
+
+const PROVENANCE_BUILD_TYPE: &str = concat!(provenance_base!(), "attested-sbom.md");
+const PROVENANCE_BUILDER_ID: &str = concat!(provenance_base!(), "builder.md");
+const PROVENANCE_HARDENED_BUILDER_ID: &str = concat!(provenance_base!(), "hardened-builder.md");
 
 #[derive(serde::Serialize)]
 pub struct Envelope {
@@ -74,6 +91,50 @@ pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
 
 pub mod envelope {
     use super::*;
+
+    pub fn provenance(
+        artifact: &Artifact,
+        spdx: &SpdxGeneration,
+        config: Config,
+        key: &SigningKey,
+    ) -> Result<Envelope> {
+        Envelope::new(
+            serde_json::json!({
+                "_type": SCHEMA_STATEMENT,
+                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), &spdx.result) ],
+                "predicateType": PREDICATE_PROVENANCE,
+                "predicate": {
+                    "buildDefinition": {
+                        "buildType": PROVENANCE_BUILD_TYPE,
+                        "externalParameters": {
+                            "artifactFormat": artifact.format,
+                            "artifact": resource_descriptor(&artifact.name, &artifact.contents),
+                        },
+                        "internalParameters": config,
+                    },
+                    "runDetails": {
+                        "builder": {
+                            "id": match config.one_shot {
+                                true => PROVENANCE_HARDENED_BUILDER_ID,
+                                false => PROVENANCE_BUILDER_ID,
+                            },
+                            "version": {
+                                "sbom-server": clap::crate_version!(),
+                                "syft": spdx.generator_version,
+                            },
+                        },
+                        "metadata": {
+                            "invocationId": Uuid::new_v4().hyphenated(),
+                            "startedOn": spdx.start.format(&Rfc3339)?,
+                            "finishedOn": spdx.end.format(&Rfc3339)?,
+                        },
+                    }
+                }
+            }),
+            Some(key),
+        )
+        .context("creating provenance envelope")
+    }
 
     pub fn spdx<S>(artifact: &Artifact, spdx: S, key: &SigningKey) -> Result<Envelope>
     where

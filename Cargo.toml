@@ -35,6 +35,7 @@ time = { version = "0.3.30", features = ["formatting", "serde"] }
 tokio = { version = "1.33.0", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.9", features = ["io"] }
 url = { version = "2.4.1", optional = true }
+uuid = { version = "1.5.0", default-features = false, features = ["v4", "fast-rng", "serde"] }
 
 [features]
 client = ["dep:reqwest", "dep:url"]
