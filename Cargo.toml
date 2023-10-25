@@ -31,6 +31,7 @@ serde_json = { version = "1.0.107", features = ["raw_value"] }
 sha256 = "1.4.0"
 tar = { version = "0.4.40", default-features = false }
 tempfile = "3.8.0"
+time = { version = "0.3.30", features = ["formatting", "serde"] }
 tokio = { version = "1.33.0", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.9", features = ["io"] }
 url = { version = "2.4.1", optional = true }

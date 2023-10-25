@@ -17,6 +17,7 @@ pub mod nsm;
 use hyper::body::Bytes;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
+use time::OffsetDateTime;
 
 pub struct Artifact {
     pub name: String,
@@ -71,4 +72,11 @@ impl fmt::Display for SpdxGenerator {
             .get_name()
             .fmt(f)
     }
+}
+
+pub struct SpdxGeneration {
+    pub result: String,
+    pub generator_version: String,
+    pub start: OffsetDateTime,
+    pub end: OffsetDateTime,
 }

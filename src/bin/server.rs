@@ -19,7 +19,8 @@ use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, StatusCode};
 use ignore_result::Ignore;
-use sbom_server::{in_toto, nsm::Nsm, Artifact, ArtifactFormat, Config, SpdxGenerator};
+use sbom_server::{in_toto, nsm::Nsm};
+use sbom_server::{Artifact, ArtifactFormat, Config, SpdxGeneration, SpdxGenerator};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -29,6 +30,7 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 use std::sync::{Arc, Mutex};
+use time::OffsetDateTime;
 use tokio::sync::oneshot;
 
 macro_rules! response_handler {
@@ -154,7 +156,7 @@ impl Service {
         };
         let spdx = generate_spdx(&artifact, self.config.spdx).context("generating SBOM")?;
         match attest {
-            Attestation::None => Ok(spdx),
+            Attestation::None => Ok(spdx.result),
             Attestation::InToto => {
                 use in_toto::envelope;
 
@@ -162,8 +164,8 @@ impl Service {
                 let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
 
                 in_toto::bundle(&[
-                    envelope::spdx(&artifact, &spdx, &key)?,
-                    envelope::scai(&artifact, &spdx, attestation)?,
+                    envelope::spdx(&artifact, &spdx.result, &key)?,
+                    envelope::scai(&artifact, &spdx.result, attestation)?,
                 ])
                 .context("creating in-toto bundle")
             }
@@ -230,9 +232,10 @@ fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
     })
 }
 
-fn generate_spdx(artifact: &Artifact, generator: SpdxGenerator) -> Result<String> {
+fn generate_spdx(artifact: &Artifact, generator: SpdxGenerator) -> Result<SpdxGeneration> {
     use SpdxGenerator::*;
 
+    let start = OffsetDateTime::now_utc();
     let dir = tempfile::tempdir().context("creating temporary directory")?;
     let archive_path = dir.path().join("archive.tar");
     std::fs::write(&archive_path, &artifact.contents).context("writing artifact")?;
@@ -261,11 +264,36 @@ fn generate_spdx(artifact: &Artifact, generator: SpdxGenerator) -> Result<String
             .output()
             .context("running syft in container"),
     }?;
+    let end = OffsetDateTime::now_utc();
+
+    let version = Vec::from(
+        match generator {
+            SyftBinary => Command::new("/syft")
+                .arg("--version")
+                .output()
+                .context("running /syft")?,
+            SyftDockerContainer => Command::new("docker")
+                .arg("run")
+                .arg("anchore/syft")
+                .arg("--version")
+                .output()
+                .context("running syft in container")?,
+        }
+        .stdout
+        .strip_prefix(b"syft ")
+        .and_then(|s| s.strip_suffix(b"\n"))
+        .context("parsing syft version")?,
+    );
 
     if output.status.success() {
-        Ok(str::from_utf8(&output.stdout)
-            .map_err(|err| anyhow!("failed to decode stdout: {err}"))?
-            .into())
+        Ok(SpdxGeneration {
+            result: str::from_utf8(&output.stdout)
+                .map_err(|err| anyhow!("failed to decode stdout: {err}"))?
+                .into(),
+            generator_version: String::from_utf8(version)?,
+            start,
+            end,
+        })
     } else {
         let stdout = str::from_utf8(&output.stdout)
             .map_err(|err| anyhow!("failed to decode stdout: {err}"))
