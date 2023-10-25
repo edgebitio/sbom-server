@@ -17,7 +17,7 @@ use ed25519_dalek::SigningKey;
 use flate2::read::GzDecoder;
 use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
-use hyper::{body, service, Body, Server, StatusCode};
+use hyper::{body, service, Body, StatusCode};
 use ignore_result::Ignore;
 use sbom_server::{in_toto, nsm::Nsm, Artifact, ArtifactFormat, Config, SpdxGenerator};
 use std::borrow::Cow;
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
 
     let (tx, rx) = oneshot::channel::<()>();
     let tx = Arc::new(Mutex::new(Some(tx)));
-    let server = Server::bind(&SocketAddr::from((config.address, config.port)))
+    let server = hyper::Server::bind(&SocketAddr::from((config.address, config.port)))
         .serve(service::make_service_fn(move |_conn| {
             let tx = tx.clone();
             async move {
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
                                 return service_unavailable("server is shutting down");
                             }
                         }
-                        handle_request(config, req).await
+                        Service { config }.handle_request(req).await
                     }
                 }))
             }
@@ -75,95 +75,98 @@ async fn main() -> Result<()> {
     Ok(server.await?)
 }
 
-async fn handle_request(config: Config, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    use ArtifactFormat::*;
-
-    let (head, body) = req.into_parts();
-
-    macro_rules! handle_post {
-        ($fn:expr) => {
-            match head.method {
-                Method::POST => match $fn {
-                    Ok(bundle) => Ok(Response::new(Body::from(bundle))),
-                    Err(err) => bad_request(format!("{err:#}\n")),
-                },
-                _ => method_not_allowed(""),
-            }
-        };
-    }
-
-    let body = match body::to_bytes(body).await {
-        Ok(body) => body,
-        Err(err) => return internal_server_error(err.to_string()),
-    };
-    let upload = match head
-        .headers
-        .get(header::CONTENT_ENCODING)
-        .map(AsRef::as_ref)
-    {
-        Some(b"gzip") => {
-            let mut upload = Vec::new();
-            match GzDecoder::new(body.reader()).read_to_end(&mut upload) {
-                Ok(_) => upload.into(),
-                Err(err) => return internal_server_error(err.to_string()),
-            }
-        }
-        Some(_) => return bad_request("unrecognized content encoding"),
-        None => body,
-    };
-    let format = match head
-        .headers
-        .get(header::CONTENT_TYPE)
-        .ok_or(bad_request("missing content type"))
-        .and_then(|header| match header.as_bytes() {
-            b"application/x-tar; scheme=docker-archive" => Ok(DockerArchive),
-            b"application/x-tar; scheme=oci-archive" => Ok(OciArchive),
-            _ => Err(bad_request("unrecognized content type")),
-        }) {
-        Ok(format) => format,
-        Err(resp) => return resp,
-    };
-
-    let spdx = config.spdx;
-
-    match head.uri.path() {
-        "/spdx" => handle_post!(handle_upload(upload, format, spdx, Attestation::None)),
-        "/in-toto/spdx" => handle_post!(handle_upload(upload, format, spdx, Attestation::InToto)),
-        _ => not_found(""),
-    }
-}
-
 enum Attestation {
     None,
     InToto,
 }
 
-fn handle_upload(
-    upload: Bytes,
-    format: ArtifactFormat,
-    generator: SpdxGenerator,
-    attest: Attestation,
-) -> Result<String> {
-    let artifact = Artifact {
-        name: artifact_name(&upload, format).context("determining name of artifact")?,
-        contents: upload,
-        format,
-    };
+struct Service {
+    config: Config,
+}
 
-    let spdx = generate_spdx(&artifact, generator).context("generating SBOM")?;
-    match attest {
-        Attestation::None => Ok(spdx),
-        Attestation::InToto => {
-            use in_toto::envelope;
+impl Service {
+    async fn handle_request(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+        use ArtifactFormat::*;
 
-            let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
-            let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
+        let (head, body) = req.into_parts();
 
-            in_toto::bundle(&[
-                envelope::spdx(&artifact, &spdx, &key)?,
-                envelope::scai(&artifact, &spdx, attestation)?,
-            ])
-            .context("creating in-toto bundle")
+        macro_rules! handle_post {
+            ($fn:expr) => {
+                match head.method {
+                    Method::POST => match $fn {
+                        Ok(bundle) => Ok(Response::new(Body::from(bundle))),
+                        Err(err) => bad_request(format!("{err:#}\n")),
+                    },
+                    _ => method_not_allowed(""),
+                }
+            };
+        }
+
+        let body = match body::to_bytes(body).await {
+            Ok(body) => body,
+            Err(err) => return internal_server_error(err.to_string()),
+        };
+        let upload = match head
+            .headers
+            .get(header::CONTENT_ENCODING)
+            .map(AsRef::as_ref)
+        {
+            Some(b"gzip") => {
+                let mut upload = Vec::new();
+                match GzDecoder::new(body.reader()).read_to_end(&mut upload) {
+                    Ok(_) => upload.into(),
+                    Err(err) => return internal_server_error(err.to_string()),
+                }
+            }
+            Some(_) => return bad_request("unrecognized content encoding"),
+            None => body,
+        };
+        let format = match head
+            .headers
+            .get(header::CONTENT_TYPE)
+            .ok_or(bad_request("missing content type"))
+            .and_then(|header| match header.as_bytes() {
+                b"application/x-tar; scheme=docker-archive" => Ok(DockerArchive),
+                b"application/x-tar; scheme=oci-archive" => Ok(OciArchive),
+                _ => Err(bad_request("unrecognized content type")),
+            }) {
+            Ok(format) => format,
+            Err(resp) => return resp,
+        };
+
+        match head.uri.path() {
+            "/spdx" => handle_post!(self.process(upload, format, Attestation::None)),
+            "/in-toto/spdx" => handle_post!(self.process(upload, format, Attestation::InToto)),
+            _ => not_found(""),
+        }
+    }
+
+    fn process(
+        &self,
+        upload: Bytes,
+        format: ArtifactFormat,
+        attest: Attestation,
+    ) -> Result<String> {
+        let artifact = Artifact {
+            name: artifact_name(&upload, format).context("determining name of artifact")?,
+            contents: upload,
+            format,
+        };
+        let spdx = generate_spdx(&artifact, self.config.spdx).context("generating SBOM")?;
+        match attest {
+            Attestation::None => Ok(spdx),
+            Attestation::InToto => {
+                use in_toto::envelope;
+
+                let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
+                let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
+
+                in_toto::bundle(&[
+                    envelope::spdx(&artifact, &spdx, &key)?,
+                    envelope::scai(&artifact, &spdx, attestation)?,
+                ])
+                .context("creating in-toto bundle")
+            }
         }
     }
 }
