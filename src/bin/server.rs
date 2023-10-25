@@ -164,6 +164,7 @@ impl Service {
                 let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
 
                 in_toto::bundle(&[
+                    envelope::provenance(&artifact, &spdx, self.config, &key)?,
                     envelope::spdx(&artifact, &spdx.result, &key)?,
                     envelope::scai(&artifact, &spdx.result, attestation)?,
                 ])

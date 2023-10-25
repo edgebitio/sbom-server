@@ -24,7 +24,8 @@ pub struct Artifact {
     pub contents: Bytes,
     pub format: ArtifactFormat,
 }
-#[derive(Clone, Copy)]
+
+#[derive(Clone, Copy, serde::Serialize)]
 pub enum ArtifactFormat {
     DockerArchive,
     OciArchive,
@@ -41,23 +42,27 @@ impl ArtifactFormat {
     }
 }
 
-#[derive(Clone, Copy, clap::Parser)]
+#[derive(Clone, Copy, clap::Parser, serde::Serialize)]
 #[command(version)]
 pub struct Config {
     #[arg(default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST), long, short)]
+    #[serde(skip)]
     pub address: IpAddr,
 
     #[arg(default_value_t = 8080, long, short)]
+    #[serde(skip)]
     pub port: u16,
 
     #[arg(default_value_t = SpdxGenerator::SyftBinary, long, short)]
+    #[serde(rename = "spdxGenerator")]
     pub spdx: SpdxGenerator,
 
     #[arg(long, short)]
+    #[serde(rename = "oneShot")]
     pub one_shot: bool,
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, clap::ValueEnum, serde::Serialize)]
 pub enum SpdxGenerator {
     SyftBinary,
     SyftDockerContainer,
