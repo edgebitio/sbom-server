@@ -21,7 +21,7 @@ use hyper::http::header::{self, HeaderValue};
 use hyper::http::{Method, Request, Response};
 use hyper::{body, service, Body, StatusCode};
 use ignore_result::Ignore;
-use sbom_server::{in_toto, nsm::Nsm};
+use sbom_server::{in_toto, nsm::Nsm, util};
 use sbom_server::{Artifact, ArtifactFormat, Config, SpdxGeneration, SpdxGenerator};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
@@ -52,6 +52,8 @@ response_handler!(service_unavailable, StatusCode::SERVICE_UNAVAILABLE);
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::parse();
+    util::init_logging(config.verbosity, &[("aws_nitro_enclaves_nsm_api", 1)]);
+    log::info!("sbom-server: {}", clap::crate_version!());
 
     let (tx, rx) = oneshot::channel::<()>();
     let tx = Arc::new(Mutex::new(Some(tx)));

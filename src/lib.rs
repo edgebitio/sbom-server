@@ -14,6 +14,7 @@
 
 pub mod in_toto;
 pub mod nsm;
+pub mod util;
 
 use hyper::body::Bytes;
 use std::fmt;
@@ -61,6 +62,9 @@ pub struct Config {
     #[arg(long, short)]
     #[serde(rename = "oneShot")]
     pub one_shot: bool,
+
+    #[clap(long = "verbose", short, action = clap::ArgAction::Count)]
+    pub verbosity: u8,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum, serde::Serialize)]

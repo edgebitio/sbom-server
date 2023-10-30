@@ -14,6 +14,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::{header, StatusCode, Url};
+use sbom_server::util;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -30,6 +31,10 @@ struct Options {
     /// Port number of the target sbom-server (requests are always made without TLS/HTTPS)
     #[arg(long, short, default_value_t = 8080)]
     port: u16,
+
+    /// Increase the amount of detail in the logs (can be specified multiple times)
+    #[clap(long = "verbose", short, action = clap::ArgAction::Count)]
+    verbosity: u8,
 }
 
 #[derive(clap::Subcommand)]
@@ -98,6 +103,9 @@ async fn main() -> Result<()> {
     use Action::*;
 
     let config = Options::parse();
+    util::init_logging(config.verbosity, &[("reqwest", 1)]);
+    log::info!("sbom-server-client: {}", clap::crate_version!());
+
     let client = Client::new(&config).context("creating upload client")?;
     match config.action {
         Sbom { artifact, attest } => client.upload_artifact(&artifact, attest).await,
@@ -144,6 +152,9 @@ impl Client {
                 File::open(path).await.context("opening artifact")?,
             ))))
         };
+
+        log::info!("Sending artifact...");
+
         let resp = self
             .client
             .post(
@@ -163,6 +174,8 @@ impl Client {
             .send()
             .await
             .context("sending artifact to server")?;
+
+        log::info!("Receiving response...");
 
         let status = resp.status();
         let text = resp.text().await.context("decoding response")?;
