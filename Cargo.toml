@@ -23,6 +23,8 @@ ed25519-dalek = { version = "2.0.0", features = ["rand_core"] }
 flate2 = "1.0.28"
 hyper = { version = "0.14.27", features = ["http1", "server", "tcp"] }
 ignore-result = "0.2.0"
+log = "0.4.20"
+pretty_env_logger = "0.5.0"
 rand = "0.8.5"
 reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "stream"], optional = true }
 serde = "1.0.188"
