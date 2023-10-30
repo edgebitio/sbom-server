@@ -16,7 +16,8 @@ use clap::Parser;
 use ed25519_dalek::SigningKey;
 use flate2::read::GzDecoder;
 use hyper::body::{Buf, Bytes};
-use hyper::http::{header, Method, Request, Response};
+use hyper::http::header::{self, HeaderValue};
+use hyper::http::{Method, Request, Response};
 use hyper::{body, service, Body, StatusCode};
 use ignore_result::Ignore;
 use sbom_server::{in_toto, nsm::Nsm};
@@ -93,10 +94,14 @@ impl Service {
         let (head, body) = req.into_parts();
 
         macro_rules! handle_post {
-            ($fn:expr) => {
+            ($fn:expr, $ctype:expr) => {
                 match head.method {
                     Method::POST => match $fn {
-                        Ok(bundle) => Ok(Response::new(Body::from(bundle))),
+                        Ok(bundle) => Ok({
+                            let mut resp = Response::new(Body::from(bundle));
+                            resp.headers_mut().insert(header::CONTENT_TYPE, $ctype);
+                            resp
+                        }),
                         Err(err) => bad_request(format!("{err:#}\n")),
                     },
                     _ => method_not_allowed(""),
@@ -137,8 +142,14 @@ impl Service {
         };
 
         match head.uri.path() {
-            "/spdx" => handle_post!(self.process(upload, format, Attestation::None)),
-            "/in-toto/spdx" => handle_post!(self.process(upload, format, Attestation::InToto)),
+            "/spdx" => handle_post!(
+                self.process(upload, format, Attestation::None),
+                HeaderValue::from_static("application/spdx+json")
+            ),
+            "/in-toto/spdx" => handle_post!(
+                self.process(upload, format, Attestation::InToto),
+                HeaderValue::from_static("application/vnd.in-toto.bundle")
+            ),
             _ => not_found(""),
         }
     }
