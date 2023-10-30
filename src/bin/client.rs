@@ -79,21 +79,20 @@ impl RefSpec {
     fn parse(s: &str) -> Result<RefSpec> {
         use RefSpec::*;
 
-        Ok(
-            match s
-                .split_once(':')
-                .ok_or(anyhow!("malformed artifact refspec"))?
-            {
-                ("docker", pullspec) => Docker(pullspec.into()),
-                ("podman", pullspec) => Podman(pullspec.into()),
-                ("registry", pullspec) => Registry(pullspec.into()),
-                ("docker-archive", path) => DockerArchive(path.into()),
-                ("oci-archive", path) => OciArchive(path.into()),
-                ("oci-dir", path) => OciDir(path.into()),
-                ("singularity", pullspec) => Singularity(pullspec.into()),
-                (schema, _) => anyhow::bail!("unrecognized artifact schema '{schema}'"),
-            },
-        )
+        let refspec = match s
+            .split_once(':')
+            .ok_or(anyhow!("malformed artifact refspec"))?
+        {
+            ("docker", pullspec) => Docker(pullspec.into()),
+            ("podman", pullspec) => Podman(pullspec.into()),
+            ("registry", pullspec) => Registry(pullspec.into()),
+            ("docker-archive", path) => DockerArchive(path.into()),
+            ("oci-archive", path) => OciArchive(path.into()),
+            ("oci-dir", path) => OciDir(path.into()),
+            ("singularity", pullspec) => Singularity(pullspec.into()),
+            (schema, _) => anyhow::bail!("unrecognized artifact schema '{schema}'"),
+        };
+        Ok(refspec)
     }
 }
 
