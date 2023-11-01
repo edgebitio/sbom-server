@@ -17,7 +17,7 @@ use anyhow::Result;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::json;
-use serde_json::value::Value;
+use serde_json::value::{RawValue, Value};
 
 const MIME_IN_TOTO: &str = "application/vnd.in-toto+json";
 const MIME_COSE_SIGN1: &str = "application/cose; cose-type=\"cose-sign1\"";
@@ -75,31 +75,27 @@ pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
 pub mod envelope {
     use super::*;
 
-    pub fn spdx<S>(source: &SourceCode, spdx: S, key: &SigningKey) -> Result<Envelope>
-    where
-        S: AsRef<str>,
-    {
+    pub fn spdx(source: &SourceCode, spdx: &RawValue, key: &SigningKey) -> Result<Envelope> {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
                 "subject": [ resource_descriptor(&source.name, &source.tarball) ],
                 "predicateType": PREDICATE_SPDX,
-                "predicate": spdx.as_ref(),
+                "predicate": spdx.to_owned(),
             }),
             Some(key),
         )
         .context("creating SPDX envelope")
     }
 
-    pub fn scai<A, S>(source: &SourceCode, spdx: S, attestation: A) -> Result<Envelope>
+    pub fn scai<A>(source: &SourceCode, spdx: &RawValue, attestation: A) -> Result<Envelope>
     where
         A: AsRef<[u8]>,
-        S: AsRef<str>,
     {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", source.name), spdx.as_ref()) ],
+                "subject": [ resource_descriptor(format!("{}.spdx.json", source.name), spdx.get()) ],
                 "predicateType": PREDICATE_SCAI,
                 "predicate": {
                     "attributes": [{

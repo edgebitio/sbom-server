@@ -19,7 +19,8 @@ use hyper::body::{Buf, Bytes};
 use hyper::http::{header, Method, Request, Response};
 use hyper::{body, service, Body, Server, StatusCode};
 use ignore_result::Ignore;
-use sbom_server::{in_toto, nsm::Nsm, SourceCode};
+use sbom_server::{in_toto, nsm, SourceCode};
+use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -184,12 +185,12 @@ fn handle_upload(
 
     let spdx = generate_spdx(&source, format, generator).context("generating SBOM")?;
     match attest {
-        Attestation::None => Ok(spdx),
+        Attestation::None => Ok(spdx.to_string()),
         Attestation::InToto => {
             use in_toto::envelope;
 
             let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
-            let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
+            let attestation = nsm::Nsm::new()?.attest(&key).context("attesting key")?;
 
             in_toto::bundle(&[
                 envelope::spdx(&source, &spdx, &key)?,
@@ -280,7 +281,7 @@ fn generate_spdx(
     source: &SourceCode,
     format: ArtifactFormat,
     generator: SpdxGenerator,
-) -> Result<String> {
+) -> Result<Box<RawValue>> {
     use SpdxGenerator::*;
 
     let dir = tempfile::tempdir().context("creating temporary directory")?;
@@ -313,9 +314,8 @@ fn generate_spdx(
     }?;
 
     if output.status.success() {
-        Ok(str::from_utf8(&output.stdout)
-            .map_err(|err| anyhow!("failed to decode stdout: {err}"))?
-            .into())
+        let stdout = String::from_utf8(output.stdout).context("utf8-decoding stdout")?;
+        Ok(RawValue::from_string(stdout).context("deserializing generator output")?)
     } else {
         let stdout = str::from_utf8(&output.stdout)
             .map_err(|err| anyhow!("failed to decode stdout: {err}"))
