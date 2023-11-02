@@ -21,6 +21,21 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use time::OffsetDateTime;
 
+macro_rules! clap_value_enum_display {
+    ($type:path) => {
+        impl fmt::Display for $type {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                use clap::ValueEnum;
+
+                self.to_possible_value()
+                    .expect("no skipped variants")
+                    .get_name()
+                    .fmt(f)
+            }
+        }
+    };
+}
+
 pub struct Artifact {
     pub name: String,
     pub contents: Bytes,
@@ -57,6 +72,11 @@ pub struct Config {
     #[serde(skip)]
     pub port: u16,
 
+    /// The NSM device to use when generating enclave attestations
+    #[arg(default_value_t = Nsm::Real, long, short)]
+    #[serde(skip)]
+    pub nsm: Nsm,
+
     /// External executable to use when generating the SPDX-formatted SBOM
     #[arg(default_value_t = SpdxGenerator::SyftBinary, long, short)]
     #[serde(rename = "spdxGenerator")]
@@ -77,17 +97,14 @@ pub enum SpdxGenerator {
     SyftBinary,
     SyftDockerContainer,
 }
+clap_value_enum_display!(SpdxGenerator);
 
-impl fmt::Display for SpdxGenerator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use clap::ValueEnum;
-
-        self.to_possible_value()
-            .expect("no skipped variants")
-            .get_name()
-            .fmt(f)
-    }
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum Nsm {
+    Real,
+    Mock,
 }
+clap_value_enum_display!(Nsm);
 
 pub struct SpdxGeneration {
     pub result: String,
