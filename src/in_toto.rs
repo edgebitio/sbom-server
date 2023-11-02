@@ -16,8 +16,8 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use serde_json::json;
-use serde_json::value::{RawValue, Value};
+use serde_json::value::RawValue;
+use std::collections::VecDeque;
 
 const MIME_IN_TOTO: &str = "application/vnd.in-toto+json";
 const MIME_COSE_SIGN1: &str = "application/cose; cose-type=\"cose-sign1\"";
@@ -37,6 +37,27 @@ pub struct Envelope {
 pub struct EnvelopeSignature {
     keyid: Option<String>,
     sig: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct Statement {
+    #[serde(rename = "_type")]
+    pub kind: String,
+    pub subject: VecDeque<ResourceDescriptor>,
+    #[serde(rename = "predicateType")]
+    pub predicate_type: String,
+    pub predicate: Box<RawValue>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ResourceDescriptor {
+    pub name: String,
+    pub digest: Digest,
+}
+
+#[derive(serde::Serialize)]
+pub struct Digest {
+    pub sha256: String,
 }
 
 impl Envelope {
@@ -64,6 +85,21 @@ impl Envelope {
     }
 }
 
+impl ResourceDescriptor {
+    fn new<N, C>(name: N, contents: C) -> ResourceDescriptor
+    where
+        N: AsRef<str>,
+        C: AsRef<[u8]>,
+    {
+        ResourceDescriptor {
+            name: name.as_ref().into(),
+            digest: Digest {
+                sha256: sha256::digest(contents.as_ref()),
+            },
+        }
+    }
+}
+
 pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
     Ok(envelopes
         .iter()
@@ -77,12 +113,12 @@ pub mod envelope {
 
     pub fn spdx(source: &SourceCode, spdx: &RawValue, key: &SigningKey) -> Result<Envelope> {
         Envelope::new(
-            serde_json::json!({
-                "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(&source.name, &source.tarball) ],
-                "predicateType": PREDICATE_SPDX,
-                "predicate": spdx.to_owned(),
-            }),
+            Statement {
+                kind: SCHEMA_STATEMENT.into(),
+                subject: VecDeque::from([ResourceDescriptor::new(&source.name, &source.tarball)]),
+                predicate_type: PREDICATE_SPDX.into(),
+                predicate: spdx.to_owned(),
+            },
             Some(key),
         )
         .context("creating SPDX envelope")
@@ -93,11 +129,14 @@ pub mod envelope {
         A: AsRef<[u8]>,
     {
         Envelope::new(
-            serde_json::json!({
-                "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", source.name), spdx.get()) ],
-                "predicateType": PREDICATE_SCAI,
-                "predicate": {
+            Statement {
+                kind: SCHEMA_STATEMENT.into(),
+                subject: VecDeque::from([ResourceDescriptor::new(
+                    format!("{}.spdx.json", source.name),
+                    spdx.get(),
+                )]),
+                predicate_type: PREDICATE_SCAI.into(),
+                predicate: serde_json::value::to_raw_value(&serde_json::json!({
                     "attributes": [{
                         "attribute": "VALID_ENCLAVE",
                         "evidence": {
@@ -106,24 +145,12 @@ pub mod envelope {
                             "mediaType": MIME_COSE_SIGN1,
                         }
                     }]
-                }
-            }),
+                }))
+                .context("serializing SCAI Attribute Report")?,
+            },
             None,
         )
         .context("creating SCAI envelope")
-    }
-
-    fn resource_descriptor<N, C>(name: N, contents: C) -> Value
-    where
-        N: AsRef<str>,
-        C: AsRef<[u8]>,
-    {
-        json!({
-            "name": name.as_ref(),
-            "digest": {
-                "sha256": sha256::digest(contents.as_ref()),
-            }
-        })
     }
 }
 
