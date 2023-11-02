@@ -19,7 +19,7 @@ aws-nitro-enclaves-nsm-api = "0.4.0"
 base64 = "0.21.4"
 clap = { version = "4.4.6", features = ["cargo", "derive"] }
 ed25519 = { version = "2.2.2", features = ["alloc", "pkcs8"] }
-ed25519-dalek = { version = "2.0.0", features = ["rand_core"] }
+ed25519-dalek = { version = "2.0.0", features = ["pkcs8", "rand_core"] }
 flate2 = "1.0.28"
 hyper = { version = "0.14.27", features = ["http1", "server", "tcp"] }
 ignore-result = "0.2.0"
@@ -29,6 +29,7 @@ rand = "0.8.5"
 reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "stream"], optional = true }
 serde = "1.0.188"
 serde_bytes = "0.11.12"
+serde_cbor = "0.11.2"
 serde_json = { version = "1.0.107", features = ["raw_value"] }
 sha256 = "1.4.0"
 tar = { version = "0.4.40", default-features = false }

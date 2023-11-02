@@ -20,21 +20,27 @@ use ed25519::PublicKeyBytes;
 use ed25519_dalek::SigningKey;
 use serde_bytes::ByteBuf;
 
-pub struct Nsm {
+pub trait Attest {
+    fn attest(&self, key: &SigningKey) -> Result<Vec<u8>>;
+}
+
+pub struct Device {
     fd: i32,
 }
 
-impl Nsm {
+impl Device {
     pub fn new() -> Result<Self> {
         let fd = match driver::nsm_init() {
             -1 => anyhow::bail!("failed to connect to NSM"),
             fd => fd,
         };
 
-        Ok(Nsm { fd })
+        Ok(Device { fd })
     }
+}
 
-    pub fn attest(&self, key: &SigningKey) -> Result<Vec<u8>> {
+impl Attest for Device {
+    fn attest(&self, key: &SigningKey) -> Result<Vec<u8>> {
         let req = Request::Attestation {
             nonce: None,
             user_data: None,
@@ -53,5 +59,42 @@ impl Nsm {
             Response::Error(err) => Err(anyhow!("nsm request failed: {:?}", err)),
             response => Err(anyhow!("unexpected response from nsm: {:#?}", response)),
         }
+    }
+}
+
+pub struct Mock {}
+
+impl Attest for Mock {
+    fn attest(&self, key: &SigningKey) -> Result<Vec<u8>> {
+        use aws_nitro_enclaves_nsm_api::api::{AttestationDoc, Digest};
+        use serde_cbor::Value;
+        use std::collections::BTreeMap;
+
+        let attestation = AttestationDoc {
+            module_id: "Mock NSM".into(),
+            digest: Digest::SHA256,
+            timestamp: 0,
+            pcrs: BTreeMap::from([(0, ByteBuf::from(vec![0; 48]))]),
+            certificate: ByteBuf::new(),
+            cabundle: Vec::new(),
+            public_key: Some(ByteBuf::from(
+                key.verifying_key()
+                    .to_public_key_der()
+                    .map_err(|err| anyhow!("encoding public key: {err}"))?
+                    .as_bytes(),
+            )),
+            user_data: None,
+            nonce: None,
+        };
+        serde_cbor::to_vec(&Value::Array(vec![
+            Value::Bytes(
+                serde_cbor::to_vec(&Value::Map(BTreeMap::new()))
+                    .context("serializing unprotected map")?,
+            ),
+            Value::Map(BTreeMap::new()),
+            Value::Bytes(attestation.to_binary()),
+            Value::Bytes(Vec::new()),
+        ]))
+        .context("serializing COSE Sign1")
     }
 }

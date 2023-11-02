@@ -21,7 +21,7 @@ use hyper::http::header::{self, HeaderValue};
 use hyper::http::{Method, Request, Response};
 use hyper::{body, service, Body, StatusCode};
 use ignore_result::Ignore;
-use sbom_server::{in_toto, nsm::Nsm, util};
+use sbom_server::{in_toto, nsm, util};
 use sbom_server::{Artifact, ArtifactFormat, Config, SpdxGeneration, SpdxGenerator};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
@@ -81,9 +81,9 @@ async fn main() -> Result<()> {
     Ok(server.await?)
 }
 
-enum Attestation {
+enum Attestation<'a> {
     None,
-    InToto,
+    InToto(&'a dyn nsm::Attest),
 }
 
 struct Service {
@@ -144,13 +144,21 @@ impl Service {
             Err(resp) => return resp,
         };
 
+        let nsm: Box<dyn nsm::Attest> = match self.config.nsm {
+            sbom_server::Nsm::Real => match nsm::Device::new() {
+                Ok(nsm) => Box::new(nsm),
+                Err(err) => return internal_server_error(err.to_string()),
+            },
+            sbom_server::Nsm::Mock => Box::new(nsm::Mock {}),
+        };
+
         match head.uri.path() {
             "/spdx" => handle_post!(
                 self.process(upload, format, Attestation::None),
                 HeaderValue::from_static("application/spdx+json")
             ),
             "/in-toto/spdx" => handle_post!(
-                self.process(upload, format, Attestation::InToto),
+                self.process(upload, format, Attestation::InToto(&*nsm)),
                 HeaderValue::from_static("application/vnd.in-toto.bundle")
             ),
             _ => not_found(""),
@@ -171,11 +179,11 @@ impl Service {
         let spdx = generate_spdx(&artifact, self.config.spdx).context("generating SBOM")?;
         match attest {
             Attestation::None => Ok(spdx.result),
-            Attestation::InToto => {
+            Attestation::InToto(nsm) => {
                 use in_toto::envelope;
 
                 let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
-                let attestation = Nsm::new()?.attest(&key).context("attesting key")?;
+                let attestation = nsm.attest(&key).context("attesting key")?;
 
                 in_toto::bundle(&[
                     envelope::provenance(&artifact, &spdx, self.config, &key)?,
