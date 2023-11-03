@@ -47,22 +47,27 @@ impl ArtifactFormat {
 #[derive(Clone, Copy, clap::Parser, serde::Serialize)]
 #[command(version)]
 pub struct Config {
+    /// Address on which to listen for requests
     #[arg(default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST), long, short)]
     #[serde(skip)]
     pub address: IpAddr,
 
+    /// Port on which to listen for requests
     #[arg(default_value_t = 8080, long, short)]
     #[serde(skip)]
     pub port: u16,
 
+    /// External executable to use when generating the SPDX-formatted SBOM
     #[arg(default_value_t = SpdxGenerator::SyftBinary, long, short)]
     #[serde(rename = "spdxGenerator")]
     pub spdx: SpdxGenerator,
 
+    /// Enable one-shot mode, where the server only handles a single request
     #[arg(long, short)]
     #[serde(rename = "oneShot")]
     pub one_shot: bool,
 
+    /// Increase the amount of detail in the logs (can be specified multiple times)
     #[clap(long = "verbose", short, action = clap::ArgAction::Count)]
     pub verbosity: u8,
 }
