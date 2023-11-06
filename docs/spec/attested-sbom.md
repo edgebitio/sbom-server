@@ -69,7 +69,8 @@ The `invocationId` MUST be set to a UUID identifying the invocation.
       },
       "internalParameters": {
         "oneShot": true,
-        "spdxGenerator": "SyftBinary"
+        "spdxGenerator": "SyftBinary",
+        "verbosity": 0
       }
     },
     "runDetails": {
