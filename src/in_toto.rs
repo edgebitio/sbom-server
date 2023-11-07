@@ -16,7 +16,8 @@ use crate::{Artifact, Config, SpdxGeneration};
 use anyhow::{Context, Result};
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use serde_json::{json, value::Value};
+use serde_json::json;
+use serde_json::value::{RawValue, Value};
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
@@ -102,7 +103,7 @@ pub mod envelope {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), &spdx.result) ],
+                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), spdx.result.get()) ],
                 "predicateType": PREDICATE_PROVENANCE,
                 "predicate": {
                     "buildDefinition": {
@@ -137,31 +138,27 @@ pub mod envelope {
         .context("creating provenance envelope")
     }
 
-    pub fn spdx<S>(artifact: &Artifact, spdx: S, key: &SigningKey) -> Result<Envelope>
-    where
-        S: AsRef<str>,
-    {
+    pub fn spdx(artifact: &Artifact, spdx: &RawValue, key: &SigningKey) -> Result<Envelope> {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
                 "subject": [ resource_descriptor(&artifact.name, &artifact.contents) ],
                 "predicateType": PREDICATE_SPDX,
-                "predicate": spdx.as_ref(),
+                "predicate": spdx.to_owned(),
             }),
             Some(key),
         )
         .context("creating SPDX envelope")
     }
 
-    pub fn scai<A, S>(artifact: &Artifact, spdx: S, attestation: A) -> Result<Envelope>
+    pub fn scai<A>(artifact: &Artifact, spdx: &RawValue, attestation: A) -> Result<Envelope>
     where
         A: AsRef<[u8]>,
-        S: AsRef<str>,
     {
         Envelope::new(
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), spdx.as_ref()) ],
+                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), spdx.get()) ],
                 "predicateType": PREDICATE_SCAI,
                 "predicate": {
                     "attributes": [{

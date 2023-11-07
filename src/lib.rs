@@ -17,6 +17,7 @@ pub mod nsm;
 pub mod util;
 
 use hyper::body::Bytes;
+use serde_json::value::RawValue;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use time::OffsetDateTime;
@@ -107,7 +108,7 @@ pub enum Nsm {
 clap_value_enum_display!(Nsm);
 
 pub struct SpdxGeneration {
-    pub result: String,
+    pub result: Box<RawValue>,
     pub generator_version: String,
     pub start: OffsetDateTime,
     pub end: OffsetDateTime,

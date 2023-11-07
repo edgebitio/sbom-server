@@ -23,6 +23,7 @@ use hyper::{body, service, Body, StatusCode};
 use ignore_result::Ignore;
 use sbom_server::{in_toto, nsm, util};
 use sbom_server::{Artifact, ArtifactFormat, Config, SpdxGeneration, SpdxGenerator};
+use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -178,7 +179,7 @@ impl Service {
         };
         let spdx = generate_spdx(&artifact, self.config.spdx).context("generating SBOM")?;
         match attest {
-            Attestation::None => Ok(spdx.result),
+            Attestation::None => Ok(spdx.result.to_string()),
             Attestation::InToto(nsm) => {
                 use in_toto::envelope;
 
@@ -309,10 +310,9 @@ fn generate_spdx(artifact: &Artifact, generator: SpdxGenerator) -> Result<SpdxGe
     );
 
     if output.status.success() {
+        let stdout = String::from_utf8(output.stdout).context("utf8-decoding stdout")?;
         Ok(SpdxGeneration {
-            result: str::from_utf8(&output.stdout)
-                .map_err(|err| anyhow!("failed to decode stdout: {err}"))?
-                .into(),
+            result: RawValue::from_string(stdout).context("deserializing generator output")?,
             generator_version: String::from_utf8(version)?,
             start,
             end,
