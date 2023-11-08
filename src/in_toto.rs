@@ -115,9 +115,9 @@ pub mod envelope {
                     },
                     "runDetails": {
                         "builder": {
-                            "id": match config.one_shot {
-                                true => PROVENANCE_HARDENED_BUILDER_ID,
-                                false => PROVENANCE_BUILDER_ID,
+                            "id": match (config.one_shot, config.verbosity) {
+                                (true, 0) => PROVENANCE_HARDENED_BUILDER_ID,
+                                _ => PROVENANCE_BUILDER_ID,
                             },
                             "version": {
                                 "sbom-server": clap::crate_version!(),
