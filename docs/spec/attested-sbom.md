@@ -92,9 +92,9 @@ The `invocationId` MUST be set to a UUID identifying the invocation.
   "subject": [
     {
       "digest": {
-        "sha256": "84466f624789fbde9c5de24b5eea29878b312e59a70d4c6e66897012a7b05c6d"
+        "sha256": "1b12c31c76fe29e0a7634901e0ae042d43a007ac8af1a11a43d5e25f41eefb12"
       },
-      "name": "hello-world:latest.tar.spdx.json"
+      "name": "hello-world:latest.tar.spdx-envelope-payload.json"
     }
   ]
 }
