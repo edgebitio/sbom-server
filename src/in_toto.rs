@@ -46,6 +46,8 @@ const PROVENANCE_HARDENED_BUILDER_ID: &str = concat!(provenance_base!(), "harden
 
 #[derive(serde::Serialize)]
 pub struct Envelope {
+    #[serde(skip)]
+    name: String,
     #[serde(rename = "payloadType")]
     payload_type: &'static str,
     payload: String,
@@ -59,9 +61,14 @@ pub struct EnvelopeSignature {
 }
 
 impl Envelope {
-    fn new<P: serde::Serialize>(payload: P, key: Option<&SigningKey>) -> Result<Self> {
+    fn new<N, P>(name: N, payload: P, key: Option<&SigningKey>) -> Result<Self>
+    where
+        N: AsRef<str>,
+        P: serde::Serialize,
+    {
         let payload = serde_json::to_string(&payload).context("serializing payload")?;
         let mut env = Envelope {
+            name: name.as_ref().to_string(),
             payload_type: MIME_IN_TOTO,
             payload: base64(&payload),
             signatures: Vec::new(),
@@ -81,6 +88,13 @@ impl Envelope {
         }
         Ok(env)
     }
+
+    fn payload_subject(&self) -> Result<Value> {
+        Ok(envelope::resource_descriptor(
+            format!("{}-envelope-payload.json", self.name),
+            base64_decode(&self.payload).context("base64-decoding envelope payload")?,
+        ))
+    }
 }
 
 pub fn bundle(envelopes: &[Envelope]) -> Result<String> {
@@ -96,14 +110,16 @@ pub mod envelope {
 
     pub fn provenance(
         artifact: &Artifact,
-        spdx: &SpdxGeneration,
+        gen: &SpdxGeneration,
+        env: &Envelope,
         config: Config,
         key: &SigningKey,
     ) -> Result<Envelope> {
         Envelope::new(
+            format!("{}.provenance", artifact.name),
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), spdx.result.get()) ],
+                "subject": [ env.payload_subject().context("getting SPDX payload subject")? ],
                 "predicateType": PREDICATE_PROVENANCE,
                 "predicate": {
                     "buildDefinition": {
@@ -122,13 +138,13 @@ pub mod envelope {
                             },
                             "version": {
                                 "sbom-server": clap::crate_version!(),
-                                "syft": spdx.generator_version,
+                                "syft": gen.generator_version,
                             },
                         },
                         "metadata": {
                             "invocationId": Uuid::new_v4().hyphenated(),
-                            "startedOn": spdx.start.format(&Rfc3339)?,
-                            "finishedOn": spdx.end.format(&Rfc3339)?,
+                            "startedOn": gen.start.format(&Rfc3339)?,
+                            "finishedOn": gen.end.format(&Rfc3339)?,
                         },
                     }
                 }
@@ -140,6 +156,7 @@ pub mod envelope {
 
     pub fn spdx(artifact: &Artifact, spdx: &RawValue, key: &SigningKey) -> Result<Envelope> {
         Envelope::new(
+            format!("{}.spdx", artifact.name),
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
                 "subject": [ resource_descriptor(&artifact.name, &artifact.contents) ],
@@ -151,14 +168,15 @@ pub mod envelope {
         .context("creating SPDX envelope")
     }
 
-    pub fn scai<A>(artifact: &Artifact, spdx: &RawValue, attestation: A) -> Result<Envelope>
+    pub fn scai<A>(artifact: &Artifact, env: &Envelope, attestation: A) -> Result<Envelope>
     where
         A: AsRef<[u8]>,
     {
         Envelope::new(
+            format!("{}.scai", artifact.name),
             serde_json::json!({
                 "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(format!("{}.spdx.json", artifact.name), spdx.get()) ],
+                "subject": [ env.payload_subject().context("getting SPDX payload subject")? ],
                 "predicateType": PREDICATE_SCAI,
                 "predicate": {
                     "attributes": [{
@@ -176,7 +194,7 @@ pub mod envelope {
         .context("creating SCAI envelope")
     }
 
-    fn resource_descriptor<N, C>(name: N, contents: C) -> Value
+    pub fn resource_descriptor<N, C>(name: N, contents: C) -> Value
     where
         N: AsRef<str>,
         C: AsRef<[u8]>,
@@ -192,4 +210,8 @@ pub mod envelope {
 
 fn base64<T: AsRef<[u8]>>(input: T) -> String {
     base64::engine::general_purpose::STANDARD.encode(input)
+}
+
+fn base64_decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>> {
+    Ok(base64::engine::general_purpose::STANDARD.decode(&input)?)
 }

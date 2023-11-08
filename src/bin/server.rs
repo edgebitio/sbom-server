@@ -177,21 +177,20 @@ impl Service {
             contents: upload,
             format,
         };
-        let spdx = generate_spdx(&artifact, self.config.spdx).context("generating SBOM")?;
+        let gen = generate_spdx(&artifact, self.config.spdx).context("generating SBOM")?;
         match attest {
-            Attestation::None => Ok(spdx.result.to_string()),
+            Attestation::None => Ok(gen.result.to_string()),
             Attestation::InToto(nsm) => {
                 use in_toto::envelope;
 
                 let key: SigningKey = SigningKey::generate(&mut rand::rngs::OsRng);
                 let attestation = nsm.attest(&key).context("attesting key")?;
 
-                in_toto::bundle(&[
-                    envelope::provenance(&artifact, &spdx, self.config, &key)?,
-                    envelope::spdx(&artifact, &spdx.result, &key)?,
-                    envelope::scai(&artifact, &spdx.result, attestation)?,
-                ])
-                .context("creating in-toto bundle")
+                let spdx = envelope::spdx(&artifact, &gen.result, &key)?;
+                let scai = envelope::scai(&artifact, &spdx, attestation)?;
+                let provenance = envelope::provenance(&artifact, &gen, &spdx, self.config, &key)?;
+
+                in_toto::bundle(&[provenance, spdx, scai]).context("creating in-toto bundle")
             }
         }
     }
