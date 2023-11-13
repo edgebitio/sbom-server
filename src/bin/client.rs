@@ -14,8 +14,10 @@
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::{header, StatusCode, Url};
+use sbom_server::in_toto::BundleParts;
 use sbom_server::util;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
 #[derive(clap::Parser)]
@@ -61,6 +63,10 @@ enum Action {
         /// Wrap the SBOM in an in-toto attestation
         #[arg(long, short)]
         attest: bool,
+
+        /// Verify the authenticity of the response
+        #[arg(default_value_t = true, long, short)]
+        verify: bool,
     },
 }
 
@@ -107,9 +113,24 @@ async fn main() -> Result<()> {
 
     let client = Client::new(&config).context("creating upload client")?;
     match config.action {
-        Sbom { artifact, attest } => client.upload_artifact(&artifact, attest).await,
+        Sbom {
+            artifact,
+            attest,
+            verify,
+        } => {
+            let resp = client.upload_artifact(&artifact, attest).await?;
+            println!("{resp}");
+
+            if verify && attest {
+                client.verify_intoto_sbom(&resp)?;
+            } else if verify {
+                log::warn!(
+                    "No attestations to verify; use the --attest flag to request attestations"
+                )
+            }
+        }
     }
-    .map(|sbom| println!("{sbom}"))
+    Ok(())
 }
 
 struct Client {
@@ -184,5 +205,22 @@ impl Client {
                 "server failed to process request ({status}): {text}"
             )),
         }
+    }
+
+    fn verify_intoto_sbom(&self, response: &str) -> Result<()> {
+        log::info!("Verifying attestation bundle");
+
+        let _parts = BundleParts::from_str(response).context("extracting response")?;
+
+        log::warn!("Enclave attestation certificate chain not yet verified");
+        log::warn!("Enclave image not yet verified");
+        log::warn!("Subject of SPDX Document not yet verified to match uploaded artifact");
+        log::warn!(
+            "Subject of SCAI Attribute Report not yet verified to match payload of SPDX envelope"
+        );
+        log::warn!("Signature on SPDX envelope not yet verified");
+        log::warn!("Server is not yet verified to be using hardened configuration");
+
+        Ok(())
     }
 }

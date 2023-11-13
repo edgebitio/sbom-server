@@ -49,7 +49,7 @@ const PROVENANCE_HARDENED_BUILDER_ID: &str = concat!(provenance_base!(), "harden
 const SCAI_ATTR_EVIDENCE_NAME: &str = "aws-enclave-attestation";
 const SCAI_ATTR_NAME: &str = "VALID_ENCLAVE";
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Envelope {
     #[serde(skip)]
     name: String,
@@ -59,7 +59,7 @@ pub struct Envelope {
     pub signatures: Vec<EnvelopeSignature>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct EnvelopeSignature {
     pub keyid: Option<String>,
     pub sig: String,
@@ -250,5 +250,52 @@ pub mod envelope {
             None,
         )
         .context("creating SCAI envelope")
+    }
+}
+
+pub struct BundleParts {}
+
+impl std::str::FromStr for BundleParts {
+    type Err = anyhow::Error;
+
+    fn from_str(response: &str) -> Result<BundleParts> {
+        let bundle = response
+            .split('\n')
+            .map(|json| serde_json::from_str(json).context("deserializing envelope"))
+            .collect::<Result<Vec<Envelope>>>()?;
+
+        for envelope in bundle {
+            let Envelope {
+                payload_type,
+                payload,
+                ..
+            } = envelope;
+
+            if payload_type != MIME_IN_TOTO {
+                log::debug!("Ignoring unrecognized envelope type '{payload_type}'");
+                continue;
+            }
+
+            let Statement {
+                kind,
+                predicate_type,
+                ..
+            } = serde_json::from_slice(&base64.decode(payload).context("base64 decoding")?)
+                .context("deserializing statement")?;
+
+            if kind != SCHEMA_STATEMENT {
+                log::debug!("Ignoring unrecognized statement type '{kind}'");
+                continue;
+            }
+
+            match predicate_type.as_str() {
+                PREDICATE_SCAI => log::trace!("Found SCAI Attribute Report"),
+                PREDICATE_SPDX => log::trace!("Found SPDX Document"),
+                PREDICATE_PROVENANCE => log::trace!("Found Provenance statement"),
+                p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),
+            }
+        }
+
+        Ok(BundleParts {})
     }
 }
