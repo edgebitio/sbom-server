@@ -13,12 +13,18 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::{header, StatusCode, Url};
+use async_compression::tokio::bufread::GzipEncoder;
+use reqwest::{header, Body, StatusCode, Url};
 use sbom_server::in_toto::BundleParts;
-use sbom_server::util;
+use sbom_server::util::{self, AsyncReadDigest};
+use sha2::Digest as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs::File;
+use tokio::io::BufReader;
+use tokio_util::io::ReaderStream;
 
 #[derive(clap::Parser)]
 #[command(version)]
@@ -118,7 +124,7 @@ async fn main() -> Result<()> {
             attest,
             verify,
         } => {
-            let resp = client.upload_artifact(&artifact, attest).await?;
+            let (resp, _digest) = client.upload_artifact(&artifact, attest).await?;
             println!("{resp}");
 
             if verify && attest {
@@ -149,12 +155,7 @@ impl Client {
         })
     }
 
-    async fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<String> {
-        use async_compression::tokio::bufread::GzipEncoder;
-        use reqwest::Body;
-        use tokio::fs::File;
-        use tokio::io::BufReader;
-        use tokio_util::io::ReaderStream;
+    async fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<(String, String)> {
         use RefSpec::*;
 
         let (path, content_type) = match artifact {
@@ -163,14 +164,15 @@ impl Client {
             _ => anyhow::bail!("artifact schema is not yet implemented"),
         };
 
-        let body = if path == Path::new("-") {
-            Body::wrap_stream(ReaderStream::new(GzipEncoder::new(BufReader::new(
-                tokio::io::stdin(),
-            ))))
+        let (body, hasher) = if path == Path::new("-") {
+            let (reader, hasher) = AsyncReadDigest::new(tokio::io::stdin());
+            let stream = ReaderStream::new(GzipEncoder::new(BufReader::new(reader)));
+            (Body::wrap_stream(stream), hasher)
         } else {
-            Body::wrap_stream(ReaderStream::new(GzipEncoder::new(BufReader::new(
-                File::open(path).await.context("opening artifact")?,
-            ))))
+            let artifact = File::open(path).await.context("opening artifact")?;
+            let (reader, hasher) = AsyncReadDigest::new(artifact);
+            let stream = ReaderStream::new(GzipEncoder::new(BufReader::new(reader)));
+            (Body::wrap_stream(stream), hasher)
         };
 
         log::info!("Sending artifact...");
@@ -197,10 +199,17 @@ impl Client {
 
         log::info!("Receiving response...");
 
+        // The following two calls to expect() won't panic as long as the response above is awaited.
+        let hasher = Arc::into_inner(hasher)
+            .expect("unable to take hasher from Arc")
+            .into_inner()
+            .expect("unable to lock mutex on hasher");
+        let digest = hex::encode(hasher.finalize().as_slice());
+
         let status = resp.status();
         let text = resp.text().await.context("decoding response")?;
         match status {
-            StatusCode::OK => Ok(text),
+            StatusCode::OK => Ok((text, digest)),
             status => Err(anyhow!(
                 "server failed to process request ({status}): {text}"
             )),
