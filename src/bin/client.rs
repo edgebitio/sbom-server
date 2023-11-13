@@ -131,14 +131,23 @@ async fn main() -> Result<()> {
             verify,
         } => {
             let (resp, digest) = client.upload_artifact(&artifact, attest).await?;
-            println!("{resp}");
 
             if verify && attest {
-                client.verify_intoto_sbom(&resp, &digest)?;
-            } else if verify {
-                log::warn!(
-                    "No attestations to verify; use the --attest flag to request attestations"
-                )
+                match client.verify_intoto_sbom(&resp, &digest) {
+                    Ok(sbom) => println!("{sbom}"),
+                    Err(err) => {
+                        log::error!("Failed to verify response from the server");
+                        log::debug!("{resp}");
+                        Err(err).context("verifying server response")?
+                    }
+                }
+            } else {
+                println!("{resp}");
+                if verify {
+                    log::warn!(
+                        "No attestations to verify; use the --attest flag to request attestations"
+                    )
+                }
             }
         }
     }
@@ -181,7 +190,7 @@ impl Client {
             (Body::wrap_stream(stream), hasher)
         };
 
-        log::info!("Sending artifact...");
+        log::info!("Sending artifact");
 
         let resp = self
             .client
@@ -203,7 +212,7 @@ impl Client {
             .await
             .context("sending artifact to server")?;
 
-        log::info!("Receiving response...");
+        log::info!("Receiving response");
 
         // The following two calls to expect() won't panic as long as the response above is awaited.
         let hasher = Arc::into_inner(hasher)
@@ -222,7 +231,7 @@ impl Client {
         }
     }
 
-    fn verify_intoto_sbom(&self, response: &str, upload_digest: &str) -> Result<()> {
+    fn verify_intoto_sbom(&self, response: &str, upload_digest: &str) -> Result<String> {
         log::info!("Verifying attestation bundle");
 
         let parts = BundleParts::from_str(response).context("extracting response")?;
@@ -303,6 +312,6 @@ impl Client {
             .context(anyhow!("verifying SPDX envelope signature"))?;
         log::debug!("Verified signature on the SPDX envelope");
 
-        Ok(())
+        Ok(parts.spdx.payload)
     }
 }
