@@ -15,6 +15,7 @@
 use anyhow::{anyhow, Context, Result};
 use async_compression::tokio::bufread::GzipEncoder;
 use reqwest::{header, Body, StatusCode, Url};
+use rustls::{server::ParsedCertificate, Certificate, RootCertStore};
 use sbom_server::in_toto::BundleParts;
 use sbom_server::util::{self, AsyncReadDigest};
 use sha2::Digest as _;
@@ -25,6 +26,8 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::BufReader;
 use tokio_util::io::ReaderStream;
+
+const NITRO_ROOT_CA: &[u8] = include_bytes!("../../nitro-root.der");
 
 #[derive(clap::Parser)]
 #[command(version)]
@@ -219,9 +222,8 @@ impl Client {
     fn verify_intoto_sbom(&self, response: &str) -> Result<()> {
         log::info!("Verifying attestation bundle");
 
-        let _parts = BundleParts::from_str(response).context("extracting response")?;
+        let parts = BundleParts::from_str(response).context("extracting response")?;
 
-        log::warn!("Enclave attestation certificate chain not yet verified");
         log::warn!("Enclave image not yet verified");
         log::warn!("Subject of SPDX Document not yet verified to match uploaded artifact");
         log::warn!(
@@ -229,6 +231,27 @@ impl Client {
         );
         log::warn!("Signature on SPDX envelope not yet verified");
         log::warn!("Server is not yet verified to be using hardened configuration");
+
+        let mut root_store = RootCertStore::empty();
+        root_store
+            .add(&Certificate(NITRO_ROOT_CA.to_vec()))
+            .expect("unable to load root certificate");
+        rustls::client::verify_server_cert_signed_by_trust_anchor(
+            &ParsedCertificate::try_from(&Certificate(
+                parts.enclave_attestation.certificate.to_vec(),
+            ))
+            .context("parsing certificate in enclave attestation")?,
+            &root_store,
+            &parts
+                .enclave_attestation
+                .cabundle
+                .iter()
+                .map(|bytes| Certificate(bytes.to_vec()))
+                .collect::<Vec<Certificate>>(),
+            std::time::SystemTime::now(),
+        )
+        .context("verifying attestation certificate chain")?;
+        log::debug!("Verified enclave attestation certificate chain");
 
         Ok(())
     }

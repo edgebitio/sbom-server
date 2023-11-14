@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::{Artifact, Config, SpdxGeneration};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
 use base64::engine::general_purpose::STANDARD as base64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -254,7 +255,9 @@ pub mod envelope {
     }
 }
 
-pub struct BundleParts {}
+pub struct BundleParts {
+    pub enclave_attestation: AttestationDoc,
+}
 
 impl std::str::FromStr for BundleParts {
     type Err = anyhow::Error;
@@ -265,6 +268,7 @@ impl std::str::FromStr for BundleParts {
             .map(|json| serde_json::from_str(json).context("deserializing envelope"))
             .collect::<Result<Vec<Envelope>>>()?;
 
+        let mut enclave_attestation = None;
         for envelope in bundle {
             let Envelope {
                 payload_type,
@@ -279,6 +283,7 @@ impl std::str::FromStr for BundleParts {
 
             let Statement {
                 kind,
+                predicate,
                 predicate_type,
                 ..
             } = serde_json::from_slice(&base64.decode(payload).context("base64 decoding")?)
@@ -290,13 +295,100 @@ impl std::str::FromStr for BundleParts {
             }
 
             match predicate_type.as_str() {
-                PREDICATE_SCAI => log::trace!("Found SCAI Attribute Report"),
+                PREDICATE_SCAI if enclave_attestation.is_some() => {
+                    log::debug!("Ignoring additional SCAI Attribute Report");
+                }
+                PREDICATE_SCAI => {
+                    match attestation_from_scai(predicate.get())
+                        .context("extracting attestation from SCAI predicate")?
+                    {
+                        Some(new) => {
+                            log::trace!("Found enclave attestation");
+                            enclave_attestation = Some(new);
+                        }
+                        None => {
+                            log::debug!("No attestation found in SCAI Attribute Report")
+                        }
+                    }
+                }
                 PREDICATE_SPDX => log::trace!("Found SPDX Document"),
                 PREDICATE_PROVENANCE => log::trace!("Found Provenance statement"),
                 p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),
             }
         }
 
-        Ok(BundleParts {})
+        Ok(BundleParts {
+            enclave_attestation: enclave_attestation
+                .ok_or(anyhow!("no enclave attestation found"))?,
+        })
     }
+}
+
+fn attestation_from_scai(predicate: &str) -> Result<Option<AttestationDoc>> {
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct ScaiAttributeReport {
+        pub attributes: VecDeque<ScaiAttribute>,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct ScaiAttribute {
+        pub attribute: String,
+        pub evidence: ScaiAttributeEvidence,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct ScaiAttributeEvidence {
+        pub name: String,
+        pub content: String,
+        #[serde(rename = "mediaType")]
+        pub media_type: String,
+    }
+
+    serde_json::from_str::<ScaiAttributeReport>(predicate)
+        .context("deserializing SCAI predicate")?
+        .attributes
+        .into_iter()
+        .find_map(|attr| {
+            let ScaiAttribute {
+                attribute,
+                evidence:
+                    ScaiAttributeEvidence {
+                        name,
+                        media_type,
+                        content,
+                    },
+            } = attr;
+
+            if attribute != SCAI_ATTR_NAME {
+                log::debug!("Ignoring unrecognized SCAI attribute '{attribute}'");
+                return None;
+            }
+
+            if name != SCAI_ATTR_EVIDENCE_NAME {
+                log::debug!("Ignoring unrecognized SCAI attribute evidence '{name}'",);
+                return None;
+            }
+
+            if media_type != MIME_COSE_SIGN1 {
+                log::debug!(
+                    "Ignoring unrecognized SCAI attribute evidence media type '{media_type}'",
+                );
+                return None;
+            }
+
+            Some(content)
+        })
+        .map(|content| {
+            AttestationDoc::from_binary(
+                &serde_cose::from_slice(
+                    &base64
+                        .decode(content)
+                        .context("base64-decoding SCAI evidence content")?,
+                )
+                .context("cose-decoding evidence")?
+                .payload,
+            )
+            .map_err(|err| anyhow!("parsing enclave attestation: {err:?}"))
+        })
+        .transpose()
 }

@@ -28,9 +28,11 @@ log = "0.4.20"
 pretty_env_logger = "0.5.0"
 rand = "0.8.5"
 reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "stream"], optional = true }
+rustls = { version = "0.21.8", features = ["dangerous_configuration"], default-features = false }
 serde = "1.0.188"
 serde_bytes = "0.11.12"
 serde_cbor = "0.11.2"
+serde_cose = "0.1.4"
 serde_json = { version = "1.0.107", features = ["raw_value"] }
 sha2 = "0.10.8"
 tar = { version = "0.4.40", default-features = false }
