@@ -128,11 +128,11 @@ async fn main() -> Result<()> {
             attest,
             verify,
         } => {
-            let (resp, _digest) = client.upload_artifact(&artifact, attest).await?;
+            let (resp, digest) = client.upload_artifact(&artifact, attest).await?;
             println!("{resp}");
 
             if verify && attest {
-                client.verify_intoto_sbom(&resp)?;
+                client.verify_intoto_sbom(&resp, &digest)?;
             } else if verify {
                 log::warn!(
                     "No attestations to verify; use the --attest flag to request attestations"
@@ -220,12 +220,11 @@ impl Client {
         }
     }
 
-    fn verify_intoto_sbom(&self, response: &str) -> Result<()> {
+    fn verify_intoto_sbom(&self, response: &str, upload_digest: &str) -> Result<()> {
         log::info!("Verifying attestation bundle");
 
         let parts = BundleParts::from_str(response).context("extracting response")?;
 
-        log::warn!("Subject of SPDX Document not yet verified to match uploaded artifact");
         log::warn!(
             "Subject of SCAI Attribute Report not yet verified to match payload of SPDX envelope"
         );
@@ -268,6 +267,16 @@ impl Client {
             anyhow::bail!("unknown enclave image (PCR0: {})", hex::encode(pcr0))
         }
         log::debug!("Verified enclave image is known-good");
+
+        if parts.spdx.subject.digest.sha256 != upload_digest {
+            log::debug!(
+                "SPDX Document subject digest: {}",
+                parts.spdx.subject.digest.sha256
+            );
+            log::debug!("Uploaded artifact digest: {}", upload_digest);
+            anyhow::bail!("SPDX Document doesn't refer to uploaded artifact");
+        }
+        log::debug!("Verified subject of SPDX Document matches uploaded artifact");
 
         Ok(())
     }

@@ -257,6 +257,11 @@ pub mod envelope {
 
 pub struct BundleParts {
     pub enclave_attestation: AttestationDoc,
+    pub spdx: SpdxBundleParts,
+}
+
+pub struct SpdxBundleParts {
+    pub subject: ResourceDescriptor,
 }
 
 impl std::str::FromStr for BundleParts {
@@ -269,6 +274,7 @@ impl std::str::FromStr for BundleParts {
             .collect::<Result<Vec<Envelope>>>()?;
 
         let mut enclave_attestation = None;
+        let mut spdx = None;
         for envelope in bundle {
             let Envelope {
                 payload_type,
@@ -285,7 +291,7 @@ impl std::str::FromStr for BundleParts {
                 kind,
                 predicate,
                 predicate_type,
-                ..
+                mut subject,
             } = serde_json::from_slice(&base64.decode(payload).context("base64 decoding")?)
                 .context("deserializing statement")?;
 
@@ -311,7 +317,16 @@ impl std::str::FromStr for BundleParts {
                         }
                     }
                 }
-                PREDICATE_SPDX => log::trace!("Found SPDX Document"),
+                PREDICATE_SPDX if spdx.is_some() => {
+                    log::debug!("Ignoring additional SPDX Document")
+                }
+                PREDICATE_SPDX => {
+                    log::trace!("Found SPDX statement");
+                    let subject = subject
+                        .pop_front()
+                        .context("SPDX Statement has no subject")?;
+                    spdx = Some(SpdxBundleParts { subject });
+                }
                 PREDICATE_PROVENANCE => log::trace!("Found Provenance statement"),
                 p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),
             }
@@ -320,6 +335,7 @@ impl std::str::FromStr for BundleParts {
         Ok(BundleParts {
             enclave_attestation: enclave_attestation
                 .ok_or(anyhow!("no enclave attestation found"))?,
+            spdx: spdx.ok_or(anyhow!("no SPDX Document found"))?,
         })
     }
 }
