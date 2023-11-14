@@ -16,9 +16,9 @@ use anyhow::{anyhow, Context, Result};
 use async_compression::tokio::bufread::GzipEncoder;
 use reqwest::{header, Body, StatusCode, Url};
 use rustls::{server::ParsedCertificate, Certificate, RootCertStore};
-use sbom_server::in_toto::BundleParts;
+use sbom_server::in_toto::{self, BundleParts, ResourceDescriptor};
 use sbom_server::util::{self, AsyncReadDigest};
-use sha2::Digest as _;
+use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -225,9 +225,6 @@ impl Client {
 
         let parts = BundleParts::from_str(response).context("extracting response")?;
 
-        log::warn!(
-            "Subject of SCAI Attribute Report not yet verified to match payload of SPDX envelope"
-        );
         log::warn!("Signature on SPDX envelope not yet verified");
         log::warn!("Server is not yet verified to be using hardened configuration");
 
@@ -277,6 +274,19 @@ impl Client {
             anyhow::bail!("SPDX Document doesn't refer to uploaded artifact");
         }
         log::debug!("Verified subject of SPDX Document matches uploaded artifact");
+
+        let spdx_payload = ResourceDescriptor {
+            name: String::from(&parts.spdx.subject.name) + ".spdx-envelope-payload.json",
+            digest: in_toto::Digest {
+                sha256: hex::encode(Sha256::digest(&parts.spdx.payload)),
+            },
+        };
+        if parts.scai_subject != spdx_payload {
+            log::debug!("SCAI Attribute Report subject: {:?}", parts.scai_subject);
+            log::debug!("SPDX envelope payload: {:?}", spdx_payload);
+            anyhow::bail!("SCAI Attribute Report doesn't refer to SPDX envelope payload");
+        }
+        log::debug!("Verified subject of SCAI Attribute Report matches payload of SPDX envelope");
 
         Ok(())
     }

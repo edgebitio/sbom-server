@@ -257,11 +257,13 @@ pub mod envelope {
 
 pub struct BundleParts {
     pub enclave_attestation: AttestationDoc,
+    pub scai_subject: ResourceDescriptor,
     pub spdx: SpdxBundleParts,
 }
 
 pub struct SpdxBundleParts {
     pub subject: ResourceDescriptor,
+    pub payload: String,
 }
 
 impl std::str::FromStr for BundleParts {
@@ -274,6 +276,7 @@ impl std::str::FromStr for BundleParts {
             .collect::<Result<Vec<Envelope>>>()?;
 
         let mut enclave_attestation = None;
+        let mut scai_subject = None;
         let mut spdx = None;
         for envelope in bundle {
             let Envelope {
@@ -292,7 +295,7 @@ impl std::str::FromStr for BundleParts {
                 predicate,
                 predicate_type,
                 mut subject,
-            } = serde_json::from_slice(&base64.decode(payload).context("base64 decoding")?)
+            } = serde_json::from_slice(&base64.decode(payload.clone()).context("base64 decoding")?)
                 .context("deserializing statement")?;
 
             if kind != SCHEMA_STATEMENT {
@@ -311,6 +314,7 @@ impl std::str::FromStr for BundleParts {
                         Some(new) => {
                             log::trace!("Found enclave attestation");
                             enclave_attestation = Some(new);
+                            scai_subject = subject.pop_front();
                         }
                         None => {
                             log::debug!("No attestation found in SCAI Attribute Report")
@@ -325,7 +329,14 @@ impl std::str::FromStr for BundleParts {
                     let subject = subject
                         .pop_front()
                         .context("SPDX Statement has no subject")?;
-                    spdx = Some(SpdxBundleParts { subject });
+                    let payload = String::from_utf8(
+                        base64
+                            .decode(payload)
+                            .context("base64-decoding SPDX envelope payload")?,
+                    )
+                    .context("utf8-decoding SPDX envelope payload")?;
+
+                    spdx = Some(SpdxBundleParts { subject, payload });
                 }
                 PREDICATE_PROVENANCE => log::trace!("Found Provenance statement"),
                 p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),
@@ -335,6 +346,8 @@ impl std::str::FromStr for BundleParts {
         Ok(BundleParts {
             enclave_attestation: enclave_attestation
                 .ok_or(anyhow!("no enclave attestation found"))?,
+            scai_subject: scai_subject
+                .ok_or(anyhow!("no subject found in SCAI Attribute Report"))?,
             spdx: spdx.ok_or(anyhow!("no SPDX Document found"))?,
         })
     }
