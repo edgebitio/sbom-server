@@ -17,6 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
 use base64::engine::general_purpose::STANDARD as base64;
 use base64::Engine;
+use ed25519::Signature;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::value::RawValue;
 use sha2::{Digest as _, Sha256};
@@ -110,6 +111,17 @@ impl fmt::Display for Digest {
 }
 
 impl Envelope {
+    pub fn pae<P: AsRef<str>>(payload: P) -> String {
+        let payload = payload.as_ref();
+        format!(
+            "DSSEv1 {} {} {} {}",
+            MIME_IN_TOTO.len(),
+            MIME_IN_TOTO,
+            payload.len(),
+            payload
+        )
+    }
+
     fn new<N, P>(name: N, payload: P, key: Option<&SigningKey>) -> Result<Self>
     where
         N: AsRef<str>,
@@ -123,13 +135,7 @@ impl Envelope {
             signatures: Vec::new(),
         };
         if let Some(key) = key {
-            let pae = format!(
-                "DSSEv1 {} {} {} {}",
-                env.payload_type.len(),
-                env.payload_type,
-                payload.len(),
-                payload
-            );
+            let pae = Self::pae(payload);
             env.signatures.push(EnvelopeSignature {
                 keyid: None,
                 sig: base64.encode(key.sign(pae.as_bytes()).to_bytes()),
@@ -262,6 +268,7 @@ pub struct BundleParts {
 }
 
 pub struct SpdxBundleParts {
+    pub signature: Signature,
     pub subject: ResourceDescriptor,
     pub payload: String,
 }
@@ -282,6 +289,7 @@ impl std::str::FromStr for BundleParts {
             let Envelope {
                 payload_type,
                 payload,
+                signatures,
                 ..
             } = envelope;
 
@@ -326,6 +334,21 @@ impl std::str::FromStr for BundleParts {
                 }
                 PREDICATE_SPDX => {
                     log::trace!("Found SPDX statement");
+                    let signature = signatures
+                        .first()
+                        .ok_or(anyhow!("no signatures"))
+                        .and_then(|envsig| {
+                            log::trace!(
+                                "Found signature on SPDX envelope by {}",
+                                envsig.keyid.as_ref().unwrap_or(&"unknown key".into())
+                            );
+                            let bytes = base64
+                                .decode(&envsig.sig)
+                                .context("base64-decoding signature")?;
+                            Signature::from_slice(&bytes)
+                                .map_err(|err| anyhow!("parsing signature: {err}"))
+                        })
+                        .context("getting signature on SPDX envelope")?;
                     let subject = subject
                         .pop_front()
                         .context("SPDX Statement has no subject")?;
@@ -336,7 +359,11 @@ impl std::str::FromStr for BundleParts {
                     )
                     .context("utf8-decoding SPDX envelope payload")?;
 
-                    spdx = Some(SpdxBundleParts { subject, payload });
+                    spdx = Some(SpdxBundleParts {
+                        signature,
+                        subject,
+                        payload,
+                    });
                 }
                 PREDICATE_PROVENANCE => log::trace!("Found Provenance statement"),
                 p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),

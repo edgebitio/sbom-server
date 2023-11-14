@@ -14,9 +14,11 @@
 
 use anyhow::{anyhow, Context, Result};
 use async_compression::tokio::bufread::GzipEncoder;
+use ed25519::pkcs8::DecodePublicKey;
+use ed25519_dalek::VerifyingKey;
 use reqwest::{header, Body, StatusCode, Url};
 use rustls::{server::ParsedCertificate, Certificate, RootCertStore};
-use sbom_server::in_toto::{self, BundleParts, ResourceDescriptor};
+use sbom_server::in_toto::{self, BundleParts, Envelope, ResourceDescriptor};
 use sbom_server::util::{self, AsyncReadDigest};
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
@@ -225,7 +227,6 @@ impl Client {
 
         let parts = BundleParts::from_str(response).context("extracting response")?;
 
-        log::warn!("Signature on SPDX envelope not yet verified");
         log::warn!("Server is not yet verified to be using hardened configuration");
 
         let mut root_store = RootCertStore::empty();
@@ -287,6 +288,20 @@ impl Client {
             anyhow::bail!("SCAI Attribute Report doesn't refer to SPDX envelope payload");
         }
         log::debug!("Verified subject of SCAI Attribute Report matches payload of SPDX envelope");
+
+        let key = VerifyingKey::from_public_key_der(
+            parts
+                .enclave_attestation
+                .public_key
+                .context("getting public key")?
+                .as_slice(),
+        )
+        .map_err(|err| anyhow!("parsing verifying key: {err}"))?;
+
+        let pae = Envelope::pae(&parts.spdx.payload);
+        key.verify_strict(pae.as_bytes(), &parts.spdx.signature)
+            .context(anyhow!("verifying SPDX envelope signature"))?;
+        log::debug!("Verified signature on the SPDX envelope");
 
         Ok(())
     }
