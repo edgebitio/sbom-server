@@ -28,6 +28,7 @@ use tokio::io::BufReader;
 use tokio_util::io::ReaderStream;
 
 const NITRO_ROOT_CA: &[u8] = include_bytes!("../../nitro-root.der");
+const KNOWN_GOOD_PCR0S: &[u8] = include_bytes!("../../known-good-pcr0s.txt");
 
 #[derive(clap::Parser)]
 #[command(version)]
@@ -224,7 +225,6 @@ impl Client {
 
         let parts = BundleParts::from_str(response).context("extracting response")?;
 
-        log::warn!("Enclave image not yet verified");
         log::warn!("Subject of SPDX Document not yet verified to match uploaded artifact");
         log::warn!(
             "Subject of SCAI Attribute Report not yet verified to match payload of SPDX envelope"
@@ -252,6 +252,22 @@ impl Client {
         )
         .context("verifying attestation certificate chain")?;
         log::debug!("Verified enclave attestation certificate chain");
+
+        let pcr0 = parts
+            .enclave_attestation
+            .pcrs
+            .get(&0)
+            .context("getting PCR0")?;
+
+        if !KNOWN_GOOD_PCR0S.split(|b| b == &b'\n').any(|raw| {
+            hex::decode(raw).unwrap_or_else(|err| {
+                log::warn!("Failed to parse known-good PCR0 ({err})");
+                Vec::new()
+            }) == pcr0[..]
+        }) {
+            anyhow::bail!("unknown enclave image (PCR0: {})", hex::encode(pcr0))
+        }
+        log::debug!("Verified enclave image is known-good");
 
         Ok(())
     }
