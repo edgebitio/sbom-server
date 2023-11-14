@@ -265,12 +265,19 @@ pub struct BundleParts {
     pub enclave_attestation: AttestationDoc,
     pub scai_subject: ResourceDescriptor,
     pub spdx: SpdxBundleParts,
+    pub provenance: ProvenanceBundleParts,
 }
 
 pub struct SpdxBundleParts {
     pub signature: Signature,
     pub subject: ResourceDescriptor,
     pub payload: String,
+}
+
+pub struct ProvenanceBundleParts {
+    pub hardened: bool,
+    pub payload: String,
+    pub signature: Signature,
 }
 
 impl std::str::FromStr for BundleParts {
@@ -282,6 +289,7 @@ impl std::str::FromStr for BundleParts {
             .map(|json| serde_json::from_str(json).context("deserializing envelope"))
             .collect::<Result<Vec<Envelope>>>()?;
 
+        let mut provenance = None;
         let mut enclave_attestation = None;
         let mut scai_subject = None;
         let mut spdx = None;
@@ -311,6 +319,37 @@ impl std::str::FromStr for BundleParts {
                 continue;
             }
 
+            macro_rules! envelope_signature {
+                ($name:literal) => {
+                    signatures
+                        .first()
+                        .ok_or(anyhow!("no signatures"))
+                        .and_then(|envsig| {
+                            log::trace!(
+                                "Found signature on {} envelope by {}",
+                                $name,
+                                envsig.keyid.as_ref().unwrap_or(&"unknown key".into())
+                            );
+                            let bytes = base64
+                                .decode(&envsig.sig)
+                                .context("base64-decoding signature")?;
+                            Signature::from_slice(&bytes)
+                                .map_err(|err| anyhow!("parsing signature: {err}"))
+                        })
+                        .context(anyhow!("getting signature on {} envelope", $name))?
+                };
+            }
+            macro_rules! envelope_payload {
+                ($name:literal) => {
+                    String::from_utf8(
+                        base64
+                            .decode(payload)
+                            .context(anyhow!("base64-decoding {} envelope payload", $name))?,
+                    )
+                    .context(anyhow!("utf8-decoding {} envelope payload", $name))?
+                };
+            }
+
             match predicate_type.as_str() {
                 PREDICATE_SCAI if enclave_attestation.is_some() => {
                     log::debug!("Ignoring additional SCAI Attribute Report");
@@ -334,38 +373,52 @@ impl std::str::FromStr for BundleParts {
                 }
                 PREDICATE_SPDX => {
                     log::trace!("Found SPDX statement");
-                    let signature = signatures
-                        .first()
-                        .ok_or(anyhow!("no signatures"))
-                        .and_then(|envsig| {
-                            log::trace!(
-                                "Found signature on SPDX envelope by {}",
-                                envsig.keyid.as_ref().unwrap_or(&"unknown key".into())
-                            );
-                            let bytes = base64
-                                .decode(&envsig.sig)
-                                .context("base64-decoding signature")?;
-                            Signature::from_slice(&bytes)
-                                .map_err(|err| anyhow!("parsing signature: {err}"))
-                        })
-                        .context("getting signature on SPDX envelope")?;
-                    let subject = subject
-                        .pop_front()
-                        .context("SPDX Statement has no subject")?;
-                    let payload = String::from_utf8(
-                        base64
-                            .decode(payload)
-                            .context("base64-decoding SPDX envelope payload")?,
-                    )
-                    .context("utf8-decoding SPDX envelope payload")?;
 
                     spdx = Some(SpdxBundleParts {
-                        signature,
-                        subject,
-                        payload,
+                        signature: envelope_signature!("SPDX"),
+                        subject: subject
+                            .pop_front()
+                            .context("SPDX Statement has no subject")?,
+                        payload: envelope_payload!("SPDX"),
                     });
                 }
-                PREDICATE_PROVENANCE => log::trace!("Found Provenance statement"),
+                PREDICATE_PROVENANCE if provenance.is_some() => {
+                    log::debug!("Ignoring additional Provenance document");
+                }
+                PREDICATE_PROVENANCE => {
+                    log::trace!("Found Provenance statement");
+
+                    #[derive(serde::Deserialize)]
+                    struct Provenance {
+                        #[serde(rename = "buildDefinition")]
+                        build_definition: BuildDefinition,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct BuildDefinition {
+                        #[serde(rename = "internalParameters")]
+                        internal_parameters: InternalParameters,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct InternalParameters {
+                        #[serde(rename = "oneShot")]
+                        one_shot: bool,
+                        verbosity: u8,
+                    }
+
+                    let Provenance {
+                        build_definition:
+                            BuildDefinition {
+                                internal_parameters: params,
+                            },
+                    } = serde_json::from_str(predicate.get())
+                        .context("parsing Provenance Document")?;
+
+                    provenance = Some(ProvenanceBundleParts {
+                        hardened: params.one_shot && params.verbosity == 0,
+                        payload: envelope_payload!("Provenance"),
+                        signature: envelope_signature!("Provenance"),
+                    });
+                }
                 p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),
             }
         }
@@ -373,6 +426,7 @@ impl std::str::FromStr for BundleParts {
         Ok(BundleParts {
             enclave_attestation: enclave_attestation
                 .ok_or(anyhow!("no enclave attestation found"))?,
+            provenance: provenance.ok_or(anyhow!("no Provenance Document found"))?,
             scai_subject: scai_subject
                 .ok_or(anyhow!("no subject found in SCAI Attribute Report"))?,
             spdx: spdx.ok_or(anyhow!("no SPDX Document found"))?,

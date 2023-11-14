@@ -236,8 +236,6 @@ impl Client {
 
         let parts = BundleParts::from_str(response).context("extracting response")?;
 
-        log::warn!("Server is not yet verified to be using hardened configuration");
-
         let mut root_store = RootCertStore::empty();
         root_store
             .add(&Certificate(NITRO_ROOT_CA.to_vec()))
@@ -311,6 +309,17 @@ impl Client {
         key.verify_strict(pae.as_bytes(), &parts.spdx.signature)
             .context(anyhow!("verifying SPDX envelope signature"))?;
         log::debug!("Verified signature on the SPDX envelope");
+
+        let pae = Envelope::pae(&parts.provenance.payload);
+        key.verify_strict(pae.as_bytes(), &parts.provenance.signature)
+            .context(anyhow!("verifying Provenance envelope signature"))?;
+        log::debug!("Verified signature on the Provenance envelope");
+
+        if parts.provenance.hardened {
+            log::debug!("Verified server is using a hardened configuration")
+        } else {
+            log::warn!("Server is not using a hardened configuration")
+        }
 
         Ok(parts.spdx.payload)
     }
