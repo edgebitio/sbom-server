@@ -76,9 +76,9 @@ enum Action {
         #[arg(long, short)]
         attest: bool,
 
-        /// Verify the authenticity of the response
-        #[arg(default_value_t = true, long, short)]
-        verify: bool,
+        /// Don't verify the authenticity of the response
+        #[arg(long, short)]
+        no_verify: bool,
     },
 }
 
@@ -128,11 +128,11 @@ async fn main() -> Result<()> {
         Sbom {
             artifact,
             attest,
-            verify,
+            no_verify,
         } => {
             let (resp, digest) = client.upload_artifact(&artifact, attest).await?;
 
-            if verify && attest {
+            if !no_verify && attest {
                 match client.verify_intoto_sbom(&resp, &digest) {
                     Ok(sbom) => println!("{sbom}"),
                     Err(err) => {
@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
                 }
             } else {
                 println!("{resp}");
-                if verify {
+                if !no_verify {
                     log::warn!(
                         "No attestations to verify; use the --attest flag to request attestations"
                     )
