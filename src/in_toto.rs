@@ -18,6 +18,7 @@ use base64::engine::general_purpose::STANDARD as base64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::value::RawValue;
+use sha2::{Digest as _, Sha256};
 use std::collections::VecDeque;
 use std::fmt;
 use time::format_description::well_known::Rfc3339;
@@ -90,7 +91,7 @@ impl ResourceDescriptor {
         ResourceDescriptor {
             name: name.as_ref().to_owned(),
             digest: Digest {
-                sha256: sha256::digest(contents.as_ref()),
+                sha256: hex::encode(Sha256::digest(contents.as_ref())),
             },
         }
     }
