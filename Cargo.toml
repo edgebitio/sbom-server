@@ -21,17 +21,20 @@ clap = { version = "4.4.6", features = ["cargo", "derive"] }
 ed25519 = { version = "2.2.2", features = ["alloc", "pkcs8"] }
 ed25519-dalek = { version = "2.0.0", features = ["pkcs8", "rand_core"] }
 flate2 = "1.0.28"
+hex = "0.4.3"
 hyper = { version = "0.14.27", features = ["http1", "server", "tcp"] }
 ignore-result = "0.2.0"
 log = "0.4.20"
 pretty_env_logger = "0.5.0"
 rand = "0.8.5"
 reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "stream"], optional = true }
+rustls = { version = "0.21.8", features = ["dangerous_configuration"], default-features = false }
 serde = "1.0.188"
 serde_bytes = "0.11.12"
 serde_cbor = "0.11.2"
+serde_cose = "0.1.4"
 serde_json = { version = "1.0.107", features = ["raw_value"] }
-sha256 = "1.4.0"
+sha2 = "0.10.8"
 tar = { version = "0.4.40", default-features = false }
 tempfile = "3.8.0"
 time = { version = "0.3.30", features = ["formatting", "serde"] }

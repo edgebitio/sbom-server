@@ -319,10 +319,10 @@ fn generate_spdx(artifact: &Artifact, generator: SpdxGenerator) -> Result<SpdxGe
     } else {
         let stdout = str::from_utf8(&output.stdout)
             .map_err(|err| anyhow!("failed to decode stdout: {err}"))
-            .map(|stdout| anyhow!("{stdout}"))?;
+            .map(|stdout| stdout.to_string())?;
         let stderr = str::from_utf8(&output.stderr)
             .map_err(|err| anyhow!("failed to decode stderr: {err}"))
-            .map(|stderr| anyhow!("{stderr}"))?;
+            .map(|stderr| stderr.to_string())?;
         Err(anyhow!(
             "failed to run syft ({}):\nstdout: {stdout}\nstderr: {stderr}",
             output.status

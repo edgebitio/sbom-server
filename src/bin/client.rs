@@ -13,10 +13,24 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::{header, StatusCode, Url};
-use sbom_server::util;
+use async_compression::tokio::bufread::GzipEncoder;
+use ed25519::pkcs8::DecodePublicKey;
+use ed25519_dalek::VerifyingKey;
+use reqwest::{header, Body, StatusCode, Url};
+use rustls::{server::ParsedCertificate, Certificate, RootCertStore};
+use sbom_server::in_toto::{self, BundleParts, Envelope, ResourceDescriptor};
+use sbom_server::util::{self, AsyncReadDigest};
+use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs::File;
+use tokio::io::BufReader;
+use tokio_util::io::ReaderStream;
+
+const NITRO_ROOT_CA: &[u8] = include_bytes!("../../nitro-root.der");
+const KNOWN_GOOD_PCR0S: &[u8] = include_bytes!("../../known-good-pcr0s.txt");
 
 #[derive(clap::Parser)]
 #[command(version)]
@@ -61,6 +75,10 @@ enum Action {
         /// Wrap the SBOM in an in-toto attestation
         #[arg(long, short)]
         attest: bool,
+
+        /// Verify the authenticity of the response
+        #[arg(default_value_t = true, long, short)]
+        verify: bool,
     },
 }
 
@@ -79,21 +97,20 @@ impl RefSpec {
     fn parse(s: &str) -> Result<RefSpec> {
         use RefSpec::*;
 
-        Ok(
-            match s
-                .split_once(':')
-                .ok_or(anyhow!("malformed artifact refspec"))?
-            {
-                ("docker", pullspec) => Docker(pullspec.into()),
-                ("podman", pullspec) => Podman(pullspec.into()),
-                ("registry", pullspec) => Registry(pullspec.into()),
-                ("docker-archive", path) => DockerArchive(path.into()),
-                ("oci-archive", path) => OciArchive(path.into()),
-                ("oci-dir", path) => OciDir(path.into()),
-                ("singularity", pullspec) => Singularity(pullspec.into()),
-                (schema, _) => anyhow::bail!("unrecognized artifact schema '{schema}'"),
-            },
-        )
+        let refspec = match s
+            .split_once(':')
+            .ok_or(anyhow!("malformed artifact refspec"))?
+        {
+            ("docker", pullspec) => Docker(pullspec.into()),
+            ("podman", pullspec) => Podman(pullspec.into()),
+            ("registry", pullspec) => Registry(pullspec.into()),
+            ("docker-archive", path) => DockerArchive(path.into()),
+            ("oci-archive", path) => OciArchive(path.into()),
+            ("oci-dir", path) => OciDir(path.into()),
+            ("singularity", pullspec) => Singularity(pullspec.into()),
+            (schema, _) => anyhow::bail!("unrecognized artifact schema '{schema}'"),
+        };
+        Ok(refspec)
     }
 }
 
@@ -108,9 +125,33 @@ async fn main() -> Result<()> {
 
     let client = Client::new(&config).context("creating upload client")?;
     match config.action {
-        Sbom { artifact, attest } => client.upload_artifact(&artifact, attest).await,
+        Sbom {
+            artifact,
+            attest,
+            verify,
+        } => {
+            let (resp, digest) = client.upload_artifact(&artifact, attest).await?;
+
+            if verify && attest {
+                match client.verify_intoto_sbom(&resp, &digest) {
+                    Ok(sbom) => println!("{sbom}"),
+                    Err(err) => {
+                        log::error!("Failed to verify response from the server");
+                        log::debug!("{resp}");
+                        Err(err).context("verifying server response")?
+                    }
+                }
+            } else {
+                println!("{resp}");
+                if verify {
+                    log::warn!(
+                        "No attestations to verify; use the --attest flag to request attestations"
+                    )
+                }
+            }
+        }
     }
-    .map(|sbom| println!("{sbom}"))
+    Ok(())
 }
 
 struct Client {
@@ -129,12 +170,7 @@ impl Client {
         })
     }
 
-    async fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<String> {
-        use async_compression::tokio::bufread::GzipEncoder;
-        use reqwest::Body;
-        use tokio::fs::File;
-        use tokio::io::BufReader;
-        use tokio_util::io::ReaderStream;
+    async fn upload_artifact(&self, artifact: &RefSpec, attest: bool) -> Result<(String, String)> {
         use RefSpec::*;
 
         let (path, content_type) = match artifact {
@@ -143,17 +179,18 @@ impl Client {
             _ => anyhow::bail!("artifact schema is not yet implemented"),
         };
 
-        let body = if path == Path::new("-") {
-            Body::wrap_stream(ReaderStream::new(GzipEncoder::new(BufReader::new(
-                tokio::io::stdin(),
-            ))))
+        let (body, hasher) = if path == Path::new("-") {
+            let (reader, hasher) = AsyncReadDigest::new(tokio::io::stdin());
+            let stream = ReaderStream::new(GzipEncoder::new(BufReader::new(reader)));
+            (Body::wrap_stream(stream), hasher)
         } else {
-            Body::wrap_stream(ReaderStream::new(GzipEncoder::new(BufReader::new(
-                File::open(path).await.context("opening artifact")?,
-            ))))
+            let artifact = File::open(path).await.context("opening artifact")?;
+            let (reader, hasher) = AsyncReadDigest::new(artifact);
+            let stream = ReaderStream::new(GzipEncoder::new(BufReader::new(reader)));
+            (Body::wrap_stream(stream), hasher)
         };
 
-        log::info!("Sending artifact...");
+        log::info!("Sending artifact");
 
         let resp = self
             .client
@@ -175,15 +212,115 @@ impl Client {
             .await
             .context("sending artifact to server")?;
 
-        log::info!("Receiving response...");
+        log::info!("Receiving response");
+
+        // The following two calls to expect() won't panic as long as the response above is awaited.
+        let hasher = Arc::into_inner(hasher)
+            .expect("unable to take hasher from Arc")
+            .into_inner()
+            .expect("unable to lock mutex on hasher");
+        let digest = hex::encode(hasher.finalize().as_slice());
 
         let status = resp.status();
         let text = resp.text().await.context("decoding response")?;
         match status {
-            StatusCode::OK => Ok(text),
+            StatusCode::OK => Ok((text, digest)),
             status => Err(anyhow!(
                 "server failed to process request ({status}): {text}"
             )),
         }
+    }
+
+    fn verify_intoto_sbom(&self, response: &str, upload_digest: &str) -> Result<String> {
+        log::info!("Verifying attestation bundle");
+
+        let parts = BundleParts::from_str(response).context("extracting response")?;
+
+        let mut root_store = RootCertStore::empty();
+        root_store
+            .add(&Certificate(NITRO_ROOT_CA.to_vec()))
+            .expect("unable to load root certificate");
+        rustls::client::verify_server_cert_signed_by_trust_anchor(
+            &ParsedCertificate::try_from(&Certificate(
+                parts.enclave_attestation.certificate.to_vec(),
+            ))
+            .context("parsing certificate in enclave attestation")?,
+            &root_store,
+            &parts
+                .enclave_attestation
+                .cabundle
+                .iter()
+                .map(|bytes| Certificate(bytes.to_vec()))
+                .collect::<Vec<Certificate>>(),
+            std::time::SystemTime::now(),
+        )
+        .context("verifying attestation certificate chain")?;
+        log::debug!("Verified enclave attestation certificate chain");
+
+        let pcr0 = parts
+            .enclave_attestation
+            .pcrs
+            .get(&0)
+            .context("getting PCR0")?;
+
+        if !KNOWN_GOOD_PCR0S.split(|b| b == &b'\n').any(|raw| {
+            hex::decode(raw).unwrap_or_else(|err| {
+                log::warn!("Failed to parse known-good PCR0 ({err})");
+                Vec::new()
+            }) == pcr0[..]
+        }) {
+            anyhow::bail!("unknown enclave image (PCR0: {})", hex::encode(pcr0))
+        }
+        log::debug!("Verified enclave image is known-good");
+
+        if parts.spdx.subject.digest.sha256 != upload_digest {
+            log::debug!(
+                "SPDX Document subject digest: {}",
+                parts.spdx.subject.digest.sha256
+            );
+            log::debug!("Uploaded artifact digest: {}", upload_digest);
+            anyhow::bail!("SPDX Document doesn't refer to uploaded artifact");
+        }
+        log::debug!("Verified subject of SPDX Document matches uploaded artifact");
+
+        let spdx_payload = ResourceDescriptor {
+            name: String::from(&parts.spdx.subject.name) + ".spdx-envelope-payload.json",
+            digest: in_toto::Digest {
+                sha256: hex::encode(Sha256::digest(&parts.spdx.payload)),
+            },
+        };
+        if parts.scai_subject != spdx_payload {
+            log::debug!("SCAI Attribute Report subject: {:?}", parts.scai_subject);
+            log::debug!("SPDX envelope payload: {:?}", spdx_payload);
+            anyhow::bail!("SCAI Attribute Report doesn't refer to SPDX envelope payload");
+        }
+        log::debug!("Verified subject of SCAI Attribute Report matches payload of SPDX envelope");
+
+        let key = VerifyingKey::from_public_key_der(
+            parts
+                .enclave_attestation
+                .public_key
+                .context("getting public key")?
+                .as_slice(),
+        )
+        .map_err(|err| anyhow!("parsing verifying key: {err}"))?;
+
+        let pae = Envelope::pae(&parts.spdx.payload);
+        key.verify_strict(pae.as_bytes(), &parts.spdx.signature)
+            .context(anyhow!("verifying SPDX envelope signature"))?;
+        log::debug!("Verified signature on the SPDX envelope");
+
+        let pae = Envelope::pae(&parts.provenance.payload);
+        key.verify_strict(pae.as_bytes(), &parts.provenance.signature)
+            .context(anyhow!("verifying Provenance envelope signature"))?;
+        log::debug!("Verified signature on the Provenance envelope");
+
+        if parts.provenance.hardened {
+            log::debug!("Verified server is using a hardened configuration")
+        } else {
+            log::warn!("Server is not using a hardened configuration")
+        }
+
+        Ok(parts.spdx.payload)
     }
 }

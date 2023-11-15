@@ -13,11 +13,16 @@
 // limitations under the License.
 
 use crate::{Artifact, Config, SpdxGeneration};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
+use base64::engine::general_purpose::STANDARD as base64;
 use base64::Engine;
+use ed25519::Signature;
 use ed25519_dalek::{Signer, SigningKey};
-use serde_json::json;
-use serde_json::value::{RawValue, Value};
+use serde_json::value::RawValue;
+use sha2::{Digest as _, Sha256};
+use std::collections::VecDeque;
+use std::fmt;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
@@ -44,23 +49,79 @@ const PROVENANCE_BUILD_TYPE: &str = concat!(provenance_base!(), "attested-sbom.m
 const PROVENANCE_BUILDER_ID: &str = concat!(provenance_base!(), "builder.md");
 const PROVENANCE_HARDENED_BUILDER_ID: &str = concat!(provenance_base!(), "hardened-builder.md");
 
-#[derive(serde::Serialize)]
+const SCAI_ATTR_EVIDENCE_NAME: &str = "aws-enclave-attestation";
+const SCAI_ATTR_NAME: &str = "VALID_ENCLAVE";
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Envelope {
     #[serde(skip)]
     name: String,
     #[serde(rename = "payloadType")]
-    payload_type: &'static str,
-    payload: String,
-    signatures: Vec<EnvelopeSignature>,
+    pub payload_type: String,
+    pub payload: String,
+    pub signatures: Vec<EnvelopeSignature>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct EnvelopeSignature {
-    keyid: Option<String>,
-    sig: String,
+    pub keyid: Option<String>,
+    pub sig: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct Statement {
+    #[serde(rename = "_type")]
+    pub kind: String,
+    pub subject: VecDeque<ResourceDescriptor>,
+    #[serde(rename = "predicateType")]
+    pub predicate_type: String,
+    pub predicate: Box<RawValue>,
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ResourceDescriptor {
+    pub name: String,
+    pub digest: Digest,
+}
+
+impl ResourceDescriptor {
+    pub fn new<N, C>(name: N, contents: C) -> Self
+    where
+        N: AsRef<str>,
+        C: AsRef<[u8]>,
+    {
+        ResourceDescriptor {
+            name: name.as_ref().to_owned(),
+            digest: Digest {
+                sha256: hex::encode(Sha256::digest(contents.as_ref())),
+            },
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Digest {
+    pub sha256: String,
+}
+
+impl fmt::Display for Digest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "sha256:{}", self.sha256)
+    }
 }
 
 impl Envelope {
+    pub fn pae<P: AsRef<str>>(payload: P) -> String {
+        let payload = payload.as_ref();
+        format!(
+            "DSSEv1 {} {} {} {}",
+            MIME_IN_TOTO.len(),
+            MIME_IN_TOTO,
+            payload.len(),
+            payload
+        )
+    }
+
     fn new<N, P>(name: N, payload: P, key: Option<&SigningKey>) -> Result<Self>
     where
         N: AsRef<str>,
@@ -69,30 +130,26 @@ impl Envelope {
         let payload = serde_json::to_string(&payload).context("serializing payload")?;
         let mut env = Envelope {
             name: name.as_ref().to_string(),
-            payload_type: MIME_IN_TOTO,
-            payload: base64(&payload),
+            payload_type: MIME_IN_TOTO.into(),
+            payload: base64.encode(&payload),
             signatures: Vec::new(),
         };
         if let Some(key) = key {
-            let pae = format!(
-                "DSSEv1 {} {} {} {}",
-                env.payload_type.len(),
-                env.payload_type,
-                payload.len(),
-                payload
-            );
+            let pae = Self::pae(payload);
             env.signatures.push(EnvelopeSignature {
                 keyid: None,
-                sig: base64(key.sign(pae.as_bytes()).to_bytes()),
+                sig: base64.encode(key.sign(pae.as_bytes()).to_bytes()),
             });
         }
         Ok(env)
     }
 
-    fn payload_subject(&self) -> Result<Value> {
-        Ok(envelope::resource_descriptor(
+    fn payload_subject(&self) -> Result<ResourceDescriptor> {
+        Ok(ResourceDescriptor::new(
             format!("{}-envelope-payload.json", self.name),
-            base64_decode(&self.payload).context("base64-decoding envelope payload")?,
+            base64
+                .decode(&self.payload)
+                .context("base64-decoding envelope payload")?,
         ))
     }
 }
@@ -117,16 +174,18 @@ pub mod envelope {
     ) -> Result<Envelope> {
         Envelope::new(
             format!("{}.provenance", artifact.name),
-            serde_json::json!({
-                "_type": SCHEMA_STATEMENT,
-                "subject": [ env.payload_subject().context("getting SPDX payload subject")? ],
-                "predicateType": PREDICATE_PROVENANCE,
-                "predicate": {
+            Statement {
+                kind: SCHEMA_STATEMENT.into(),
+                subject: VecDeque::from([env
+                    .payload_subject()
+                    .context("getting SPDX payload subject")?]),
+                predicate_type: PREDICATE_PROVENANCE.into(),
+                predicate: serde_json::value::to_raw_value(&serde_json::json!({
                     "buildDefinition": {
                         "buildType": PROVENANCE_BUILD_TYPE,
                         "externalParameters": {
                             "artifactFormat": artifact.format,
-                            "artifact": resource_descriptor(&artifact.name, &artifact.contents),
+                            "artifact": ResourceDescriptor::new(&artifact.name, &artifact.contents),
                         },
                         "internalParameters": config,
                     },
@@ -147,8 +206,9 @@ pub mod envelope {
                             "finishedOn": gen.end.format(&Rfc3339)?,
                         },
                     }
-                }
-            }),
+                }))
+                .context("serializing provenance predicate")?,
+            },
             Some(key),
         )
         .context("creating provenance envelope")
@@ -157,12 +217,15 @@ pub mod envelope {
     pub fn spdx(artifact: &Artifact, spdx: &RawValue, key: &SigningKey) -> Result<Envelope> {
         Envelope::new(
             format!("{}.spdx", artifact.name),
-            serde_json::json!({
-                "_type": SCHEMA_STATEMENT,
-                "subject": [ resource_descriptor(&artifact.name, &artifact.contents) ],
-                "predicateType": PREDICATE_SPDX,
-                "predicate": spdx.to_owned(),
-            }),
+            Statement {
+                kind: SCHEMA_STATEMENT.into(),
+                subject: VecDeque::from([ResourceDescriptor::new(
+                    &artifact.name,
+                    &artifact.contents,
+                )]),
+                predicate_type: PREDICATE_SPDX.into(),
+                predicate: spdx.to_owned(),
+            },
             Some(key),
         )
         .context("creating SPDX envelope")
@@ -174,44 +237,268 @@ pub mod envelope {
     {
         Envelope::new(
             format!("{}.scai", artifact.name),
-            serde_json::json!({
-                "_type": SCHEMA_STATEMENT,
-                "subject": [ env.payload_subject().context("getting SPDX payload subject")? ],
-                "predicateType": PREDICATE_SCAI,
-                "predicate": {
+            Statement {
+                kind: SCHEMA_STATEMENT.into(),
+                subject: VecDeque::from([env
+                    .payload_subject()
+                    .context("getting SPDX payload subject")?]),
+                predicate_type: PREDICATE_SCAI.into(),
+                predicate: serde_json::value::to_raw_value(&serde_json::json!({
                     "attributes": [{
-                        "attribute": "VALID_ENCLAVE",
+                        "attribute": SCAI_ATTR_NAME,
                         "evidence": {
-                            "name": "aws-enclave-attestation",
-                            "content": base64(attestation),
+                            "name": SCAI_ATTR_EVIDENCE_NAME,
+                            "content": base64.encode(attestation),
                             "mediaType": MIME_COSE_SIGN1,
                         }
                     }]
-                }
-            }),
+                }))
+                .context("serializing SCAI predicate")?,
+            },
             None,
         )
         .context("creating SCAI envelope")
     }
+}
 
-    pub fn resource_descriptor<N, C>(name: N, contents: C) -> Value
-    where
-        N: AsRef<str>,
-        C: AsRef<[u8]>,
-    {
-        json!({
-            "name": name.as_ref(),
-            "digest": {
-                "sha256": sha256::digest(contents.as_ref()),
+pub struct BundleParts {
+    pub enclave_attestation: AttestationDoc,
+    pub scai_subject: ResourceDescriptor,
+    pub spdx: SpdxBundleParts,
+    pub provenance: ProvenanceBundleParts,
+}
+
+pub struct SpdxBundleParts {
+    pub signature: Signature,
+    pub subject: ResourceDescriptor,
+    pub payload: String,
+}
+
+pub struct ProvenanceBundleParts {
+    pub hardened: bool,
+    pub payload: String,
+    pub signature: Signature,
+}
+
+impl std::str::FromStr for BundleParts {
+    type Err = anyhow::Error;
+
+    fn from_str(response: &str) -> Result<BundleParts> {
+        let bundle = response
+            .split('\n')
+            .map(|json| serde_json::from_str(json).context("deserializing envelope"))
+            .collect::<Result<Vec<Envelope>>>()?;
+
+        let mut provenance = None;
+        let mut enclave_attestation = None;
+        let mut scai_subject = None;
+        let mut spdx = None;
+        for envelope in bundle {
+            let Envelope {
+                payload_type,
+                payload,
+                signatures,
+                ..
+            } = envelope;
+
+            if payload_type != MIME_IN_TOTO {
+                log::debug!("Ignoring unrecognized envelope type '{payload_type}'");
+                continue;
             }
+
+            let Statement {
+                kind,
+                predicate,
+                predicate_type,
+                mut subject,
+            } = serde_json::from_slice(&base64.decode(payload.clone()).context("base64 decoding")?)
+                .context("deserializing statement")?;
+
+            if kind != SCHEMA_STATEMENT {
+                log::debug!("Ignoring unrecognized statement type '{kind}'");
+                continue;
+            }
+
+            macro_rules! envelope_signature {
+                ($name:literal) => {
+                    signatures
+                        .first()
+                        .ok_or(anyhow!("no signatures"))
+                        .and_then(|envsig| {
+                            log::trace!(
+                                "Found signature on {} envelope by {}",
+                                $name,
+                                envsig.keyid.as_ref().unwrap_or(&"unknown key".into())
+                            );
+                            let bytes = base64
+                                .decode(&envsig.sig)
+                                .context("base64-decoding signature")?;
+                            Signature::from_slice(&bytes)
+                                .map_err(|err| anyhow!("parsing signature: {err}"))
+                        })
+                        .context(anyhow!("getting signature on {} envelope", $name))?
+                };
+            }
+            macro_rules! envelope_payload {
+                ($name:literal) => {
+                    String::from_utf8(
+                        base64
+                            .decode(payload)
+                            .context(anyhow!("base64-decoding {} envelope payload", $name))?,
+                    )
+                    .context(anyhow!("utf8-decoding {} envelope payload", $name))?
+                };
+            }
+
+            match predicate_type.as_str() {
+                PREDICATE_SCAI if enclave_attestation.is_some() => {
+                    log::debug!("Ignoring additional SCAI Attribute Report");
+                }
+                PREDICATE_SCAI => {
+                    match attestation_from_scai(predicate.get())
+                        .context("extracting attestation from SCAI predicate")?
+                    {
+                        Some(new) => {
+                            log::trace!("Found enclave attestation");
+                            enclave_attestation = Some(new);
+                            scai_subject = subject.pop_front();
+                        }
+                        None => {
+                            log::debug!("No attestation found in SCAI Attribute Report")
+                        }
+                    }
+                }
+                PREDICATE_SPDX if spdx.is_some() => {
+                    log::debug!("Ignoring additional SPDX Document")
+                }
+                PREDICATE_SPDX => {
+                    log::trace!("Found SPDX statement");
+
+                    spdx = Some(SpdxBundleParts {
+                        signature: envelope_signature!("SPDX"),
+                        subject: subject
+                            .pop_front()
+                            .context("SPDX Statement has no subject")?,
+                        payload: envelope_payload!("SPDX"),
+                    });
+                }
+                PREDICATE_PROVENANCE if provenance.is_some() => {
+                    log::debug!("Ignoring additional Provenance document");
+                }
+                PREDICATE_PROVENANCE => {
+                    log::trace!("Found Provenance statement");
+
+                    #[derive(serde::Deserialize)]
+                    struct Provenance {
+                        #[serde(rename = "buildDefinition")]
+                        build_definition: BuildDefinition,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct BuildDefinition {
+                        #[serde(rename = "internalParameters")]
+                        internal_parameters: InternalParameters,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct InternalParameters {
+                        #[serde(rename = "oneShot")]
+                        one_shot: bool,
+                        verbosity: u8,
+                    }
+
+                    let Provenance {
+                        build_definition:
+                            BuildDefinition {
+                                internal_parameters: params,
+                            },
+                    } = serde_json::from_str(predicate.get())
+                        .context("parsing Provenance Document")?;
+
+                    provenance = Some(ProvenanceBundleParts {
+                        hardened: params.one_shot && params.verbosity == 0,
+                        payload: envelope_payload!("Provenance"),
+                        signature: envelope_signature!("Provenance"),
+                    });
+                }
+                p_type => log::debug!("Ignoring unrecognized predicate type '{p_type}'"),
+            }
+        }
+
+        Ok(BundleParts {
+            enclave_attestation: enclave_attestation
+                .ok_or(anyhow!("no enclave attestation found"))?,
+            provenance: provenance.ok_or(anyhow!("no Provenance Document found"))?,
+            scai_subject: scai_subject
+                .ok_or(anyhow!("no subject found in SCAI Attribute Report"))?,
+            spdx: spdx.ok_or(anyhow!("no SPDX Document found"))?,
         })
     }
 }
 
-fn base64<T: AsRef<[u8]>>(input: T) -> String {
-    base64::engine::general_purpose::STANDARD.encode(input)
-}
+fn attestation_from_scai(predicate: &str) -> Result<Option<AttestationDoc>> {
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct ScaiAttributeReport {
+        pub attributes: VecDeque<ScaiAttribute>,
+    }
 
-fn base64_decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>> {
-    Ok(base64::engine::general_purpose::STANDARD.decode(&input)?)
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct ScaiAttribute {
+        pub attribute: String,
+        pub evidence: ScaiAttributeEvidence,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct ScaiAttributeEvidence {
+        pub name: String,
+        pub content: String,
+        #[serde(rename = "mediaType")]
+        pub media_type: String,
+    }
+
+    serde_json::from_str::<ScaiAttributeReport>(predicate)
+        .context("deserializing SCAI predicate")?
+        .attributes
+        .into_iter()
+        .find_map(|attr| {
+            let ScaiAttribute {
+                attribute,
+                evidence:
+                    ScaiAttributeEvidence {
+                        name,
+                        media_type,
+                        content,
+                    },
+            } = attr;
+
+            if attribute != SCAI_ATTR_NAME {
+                log::debug!("Ignoring unrecognized SCAI attribute '{attribute}'");
+                return None;
+            }
+
+            if name != SCAI_ATTR_EVIDENCE_NAME {
+                log::debug!("Ignoring unrecognized SCAI attribute evidence '{name}'",);
+                return None;
+            }
+
+            if media_type != MIME_COSE_SIGN1 {
+                log::debug!(
+                    "Ignoring unrecognized SCAI attribute evidence media type '{media_type}'",
+                );
+                return None;
+            }
+
+            Some(content)
+        })
+        .map(|content| {
+            AttestationDoc::from_binary(
+                &serde_cose::from_slice(
+                    &base64
+                        .decode(content)
+                        .context("base64-decoding SCAI evidence content")?,
+                )
+                .context("cose-decoding evidence")?
+                .payload,
+            )
+            .map_err(|err| anyhow!("parsing enclave attestation: {err:?}"))
+        })
+        .transpose()
 }
