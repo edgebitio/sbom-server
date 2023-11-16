@@ -18,7 +18,7 @@ use ed25519::pkcs8::DecodePublicKey;
 use ed25519_dalek::VerifyingKey;
 use reqwest::{header, Body, StatusCode, Url};
 use rustls::{server::ParsedCertificate, Certificate, RootCertStore};
-use sbom_server::in_toto::{self, BundleParts, Envelope, ResourceDescriptor};
+use sbom_server::in_toto::{self, BundleParts, Envelope, ResourceDescriptor, Statement};
 use sbom_server::util::{self, AsyncReadDigest};
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
@@ -321,6 +321,9 @@ impl Client {
             log::warn!("Server is not using a hardened configuration")
         }
 
-        Ok(parts.spdx.payload)
+        Ok(serde_json::from_str::<Statement>(&parts.spdx.payload)
+            .context("deserializing SPDX payload")?
+            .predicate
+            .to_string())
     }
 }
