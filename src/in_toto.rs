@@ -29,7 +29,7 @@ use uuid::Uuid;
 macro_rules! provenance_base {
     () => {
         concat!(
-            "https://github.com/edgebitio/sbom-server/blob/",
+            "https://github.com/edgebitio/sbom-server/blob/v",
             clap::crate_version!(),
             "/docs/spec/"
         )
