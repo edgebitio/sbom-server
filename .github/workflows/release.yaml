@@ -1,0 +1,84 @@
+name: Release
+on:
+  push:
+    tags:
+      - '**'
+jobs:
+  build-server:
+    name: Build server
+    uses: ./.github/workflows/build.yaml
+    with:
+      binary: server
+
+  build-client:
+    name: Build client
+    needs: build-enclave
+    uses: ./.github/workflows/build.yaml
+    with:
+      binary: client
+
+  build-enclave:
+    name: Build enclave image
+    needs: build-server
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download server binary
+        uses: actions/download-artifact@v3
+        with:
+          name: server-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz
+
+      - name: Install Enclaver
+        env:
+          VERSION: 0.4.0
+        run: |
+          curl --silent \
+            --output enclaver.tar.gz \
+            --location https://github.com/edgebitio/enclaver/releases/download/v${VERSION}/enclaver-linux-x86_64-v${VERSION}.tar.gz
+          tar --extract --verbose --file enclaver.tar.gz
+          sudo install enclaver-linux-x86_64-v${VERSION}/enclaver /usr/bin
+
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::970625735569:role/GitHubActionsECRPush
+
+      - name: Authenticate to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Publish enclave image
+        env:
+          REPOSITORY: public.ecr.aws/edgebit/sbom-server-enclave
+        shell: bash
+        run: |
+          echo ::group::docker build
+          artifact=server-${{ github.ref_name }}-x86_64-unknown-linux-musl
+          tar --extract --file ${artifact}.tar.gz
+          mkdir --parents target/x86_64-unknown-linux-musl/release
+          mv ${artifact}/server $_
+          docker build --tag sbom-server:latest --file dist/Dockerfile .
+          echo ::endgroup::
+
+          tag=${REPOSITORY}:${{ github.ref_name }}
+
+          echo ::group::enclaver build
+          sed --expression "s,sbom-server-enclave:latest,${tag}," dist/enclaver.yaml > /tmp/enclaver.yaml
+          enclaver build --file /tmp/enclaver.yaml | tee stdout.txt
+          tail --lines=7 stdout.txt | jq --raw-output .Measurements.PCR0 >> known-good-pcr0s.txt
+          echo # Enclaver doesn't output a trailing newline
+          echo ::endgroup::
+
+          docker push ${tag}
+
+      - name: Upload known-good PCR0s
+        uses: actions/upload-artifact@v3
+        with:
+          name: known-good-pcr0s.txt
+          path: known-good-pcr0s.txt

@@ -1,0 +1,73 @@
+name: Build
+on:
+  workflow_call:
+    inputs:
+      binary:
+        required: true
+        type: string
+jobs:
+  build-binary:
+    name: Build binary
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            triplet: x86_64-unknown-linux-musl
+          - arch: arm64
+            triplet: aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download known-good PCR0s
+        if: ${{ inputs.binary == 'client' }}
+        uses: actions/download-artifact@v3
+        with:
+          name: known-good-pcr0s.txt
+          path: pcr0s
+
+      - name: Install known-good PCR0s
+        if: ${{ inputs.binary == 'client' }}
+        run: mv pcr0s/known-good-pcr0s.txt .
+
+      - name: Install toolchains
+        run: |
+          dpkg --add-architecture ${{ matrix.arch }}
+          apt-get update
+
+          echo ::group::Rust
+          apt-get install --assume-yes rustup
+          rustup default stable
+          rustup target add ${{ matrix.triplet }}
+          echo ::endgroup::
+
+          echo ::group::MUSL/GCC
+          apt-get install --assume-yes gcc musl-dev:${{ matrix.arch }}
+          echo ::endgroup::
+
+      - name: Build executable
+        run: cargo build --release --target ${{ matrix.triplet }} --all-features --bin ${{ inputs.binary }}
+
+      - name: Package executable
+        shell: bash
+        run: |
+          mkdir ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}
+          cp target/${{ matrix.triplet }}/release/${{ inputs.binary }} $_
+          tar --create --gzip --file $_.tar.gz $_
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
+          path: ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
+
+      - name: Publish executable
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          files: ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
+
