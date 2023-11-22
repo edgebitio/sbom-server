@@ -1,0 +1,9 @@
+version: v1
+name: "sbom-server"
+target: "sbom-server-enclave:latest"
+sources:
+  app: "sbom-server:latest"
+defaults:
+  memory_mb: 1536
+ingress:
+  - listen_port: 8080
