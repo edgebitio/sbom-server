@@ -6,6 +6,20 @@ server achieves a [SLSA Security Level][levels] of either [Build L2][l2] or
 [Build L3][l3], depending on the initial arguments and the configuration of the
 enclave image.
 
+A demonstration instance of this service is running within an AWS Nitro Enclave
+on sbom-server.demo.edgebit.io. The machine is very small, so don't be surprised
+if a "502 Bad Gateway" error is returned - this means it's tied up handling
+another request - and do not rely on it being available. The following command
+shows how a container image can be exported from docker and sent to the demo
+server:
+
+```sh
+docker image save hello-world | \
+    ./client --verbose --host sbom-server.demo.edgebit.io sbom --attest docker-archive:-
+```
+
+## Overview ##
+
 The server is designed to run within an enclave, specifically AWS Nitro Enclaves
 at the moment, but it can also operate outside, though this drops the Security
 Level down to [Build L0][l0]. When it runs within an enclave, it will
