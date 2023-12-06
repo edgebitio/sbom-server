@@ -191,8 +191,8 @@ pub mod envelope {
                     },
                     "runDetails": {
                         "builder": {
-                            "id": match (config.one_shot, config.verbosity) {
-                                (true, 0) => PROVENANCE_HARDENED_BUILDER_ID,
+                            "id": match (config.multiple, config.verbosity) {
+                                (false, 0) => PROVENANCE_HARDENED_BUILDER_ID,
                                 _ => PROVENANCE_BUILDER_ID,
                             },
                             "version": {
@@ -400,8 +400,7 @@ impl std::str::FromStr for BundleParts {
                     }
                     #[derive(serde::Deserialize)]
                     struct InternalParameters {
-                        #[serde(rename = "oneShot")]
-                        one_shot: bool,
+                        multiple: bool,
                         verbosity: u8,
                     }
 
@@ -414,7 +413,7 @@ impl std::str::FromStr for BundleParts {
                         .context("parsing Provenance Document")?;
 
                     provenance = Some(ProvenanceBundleParts {
-                        hardened: params.one_shot && params.verbosity == 0,
+                        hardened: !params.multiple && params.verbosity == 0,
                         payload: envelope_payload!("Provenance"),
                         signature: envelope_signature!("Provenance"),
                     });

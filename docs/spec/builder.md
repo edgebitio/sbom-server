@@ -12,9 +12,9 @@ The SBOM Server is implemented as a web service running within an [AWS Nitro
 Enclave][enclaves]. For every artifact uploaded, an SBOM is generated, and the
 results are signed and rooted in trust with the AWS Nitro Attestation PKI.
 
-Note that when the server is run in one-shot mode, it is considered hardened and
-will instead use the [Hardened Builder](hardened-build.md) as its SLSA Builder
-ID.
+Note that when the server is not run with `--multiple`, it is considered
+hardened and will instead use the [Hardened Builder](hardened-build.md) as its
+SLSA Builder ID.
 
 [enclaves]: https://aws.amazon.com/ec2/nitro/nitro-enclaves/
 

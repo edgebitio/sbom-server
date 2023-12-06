@@ -83,10 +83,9 @@ pub struct Config {
     #[serde(rename = "spdxGenerator")]
     pub spdx: SpdxGenerator,
 
-    /// Enable one-shot mode, where the server only handles a single request
+    /// Handle multiple requests - considered to be an unhardened configuration
     #[arg(long, short)]
-    #[serde(rename = "oneShot")]
-    pub one_shot: bool,
+    pub multiple: bool,
 
     /// Increase the amount of detail in the logs (can be specified multiple times)
     #[clap(long = "verbose", short, action = clap::ArgAction::Count)]
