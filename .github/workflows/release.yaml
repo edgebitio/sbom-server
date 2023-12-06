@@ -7,6 +7,8 @@ jobs:
   build-server:
     name: Build server
     uses: ./.github/workflows/build.yaml
+    permissions:
+      contents: write
     with:
       binary: server
 
@@ -14,6 +16,8 @@ jobs:
     name: Build client
     needs: build-enclave
     uses: ./.github/workflows/build.yaml
+    permissions:
+      contents: write
     with:
       binary: client
 
