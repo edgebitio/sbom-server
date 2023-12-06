@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
                 Ok::<_, Infallible>(service::service_fn(move |req| {
                     let tx = tx.clone();
                     async move {
-                        if config.one_shot {
+                        if !config.multiple {
                             if let Ok(Some(tx)) = tx.lock().map(|mut tx| tx.take()) {
                                 tx.send(()).ignore()
                             } else {
