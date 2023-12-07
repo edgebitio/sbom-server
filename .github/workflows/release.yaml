@@ -40,6 +40,7 @@ jobs:
     needs: build-server
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       id-token: write
     steps:
       - name: Checkout code
@@ -100,3 +101,10 @@ jobs:
         with:
           name: known-good-pcr0s.txt
           path: known-good-pcr0s.txt
+
+      - name: Publish known-good PCR0s
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          files: known-good-pcr0s.txt
