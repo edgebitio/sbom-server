@@ -202,7 +202,7 @@ fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct DockerImageManifest {
         #[serde(rename = "RepoTags")]
-        repo_tags: VecDeque<String>,
+        repo_tags: Option<VecDeque<String>>,
     }
 
     #[derive(serde::Deserialize)]
@@ -238,8 +238,13 @@ fn artifact_name(artifact: &Bytes, format: ArtifactFormat) -> Result<String> {
             let manifests: Option<VecDeque<DockerImageManifest>> =
                 find_object!("manifest.json", archive);
             manifests
-                .and_then(|mut ms| ms.pop_front())
-                .and_then(|mut m| m.repo_tags.pop_front())
+                .and_then(|ms| {
+                    ms.into_iter().find_map(|m| match m.repo_tags {
+                        Some(tags) if !tags.is_empty() => Some(tags),
+                        _ => None,
+                    })
+                })
+                .and_then(|mut tags| tags.pop_front())
                 .unwrap_or("untagged".into())
                 + ".tar"
         }
