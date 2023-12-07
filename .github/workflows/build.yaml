@@ -5,19 +5,16 @@ on:
       binary:
         required: true
         type: string
+      target:
+        required: true
+        type: string
+
 jobs:
   build-binary:
     name: Build binary
-    runs-on: ubuntu-latest
+    runs-on: ${{ contains(inputs.target, 'linux') && 'ubuntu-latest' || 'macos-latest' }}
     container:
-      image: debian:trixie
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            triplet: x86_64-unknown-linux-musl
-          - arch: arm64
-            triplet: aarch64-unknown-linux-musl
+      image: ${{ contains(inputs.target, 'linux') && 'debian:trixie' || '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -33,41 +30,39 @@ jobs:
         if: ${{ inputs.binary == 'client' }}
         run: mv pcr0s/known-good-pcr0s.txt .
 
-      - name: Install toolchains
+      - name: Install Linux-specific toolchains
+        if: ${{ contains(inputs.target, 'linux') }}
+        env:
+          ARCH: ${{ contains(inputs.target, 'x86_64') && 'amd64' || 'arm64' }}
         run: |
-          dpkg --add-architecture ${{ matrix.arch }}
+          dpkg --add-architecture ${ARCH}
           apt-get update
+          apt-get install --assume-yes gcc rustup musl-dev:${ARCH}
 
-          echo ::group::Rust
-          apt-get install --assume-yes rustup
+      - name: Install Rust
+        run: |
           rustup default stable
-          rustup target add ${{ matrix.triplet }}
-          echo ::endgroup::
-
-          echo ::group::MUSL/GCC
-          apt-get install --assume-yes gcc musl-dev:${{ matrix.arch }}
-          echo ::endgroup::
+          rustup target add ${{ inputs.target }}
 
       - name: Build executable
-        run: cargo build --release --target ${{ matrix.triplet }} --all-features --bin ${{ inputs.binary }}
+        run: cargo build --release --target ${{ inputs.target }} --all-features --bin ${{ inputs.binary }}
 
       - name: Package executable
         shell: bash
         run: |
-          mkdir ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}
-          cp target/${{ matrix.triplet }}/release/${{ inputs.binary }} $_
+          mkdir ${{ inputs.binary }}-${{ github.ref_name }}-${{ inputs.target }}
+          cp target/${{ inputs.target }}/release/${{ inputs.binary }} $_
           tar --create --gzip --file $_.tar.gz $_
 
       - name: Upload executable
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
-          path: ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
+          name: ${{ inputs.binary }}-${{ github.ref_name }}-${{ inputs.target }}.tar.gz
+          path: ${{ inputs.binary }}-${{ github.ref_name }}-${{ inputs.target }}.tar.gz
 
       - name: Publish executable
         uses: softprops/action-gh-release@v1
         with:
           draft: true
           tag_name: ${{ github.ref_name }}
-          files: ${{ inputs.binary }}-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
-
+          files: ${{ inputs.binary }}-${{ github.ref_name }}-${{ inputs.target }}.tar.gz
