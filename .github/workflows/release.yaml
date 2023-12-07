@@ -9,8 +9,14 @@ jobs:
     uses: ./.github/workflows/build.yaml
     permissions:
       contents: write
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
     with:
       binary: server
+      target: ${{ matrix.target }}
 
   build-client:
     name: Build client
@@ -18,8 +24,16 @@ jobs:
     uses: ./.github/workflows/build.yaml
     permissions:
       contents: write
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
     with:
       binary: client
+      target: ${{ matrix.target }}
 
   build-enclave:
     name: Build enclave image
