@@ -45,7 +45,7 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup default stable
+          rustup default 1.79.0
           rustup target add ${{ inputs.target }}
 
       - name: Build executable
